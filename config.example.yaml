@@ -1,0 +1,25 @@
+jobs:
+  default:
+    output_path: ./out/
+
+  multi:
+    output_path: ./out/
+    job_settings:
+      continuous_scan: true
+
+  quality:
+    output_path: ./out/
+    color: '#ff0000'
+    scan_settings:
+      pixelFormats:
+        resolution: 600
+        jpegQuality: 90
+
+  long_receipt:
+    output_path: ./out/
+    scan_settings:
+      pixelFormats:
+        height: 42304
+        width: 5120
+        paperLength: 42304
+        paperWidth: 5120

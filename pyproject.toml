@@ -1,0 +1,20 @@
+[project]
+name = "nx-boss"
+version = "0.1.0"
+description = "Compatible server for PaperStream NX Manager"
+readme = "README.md"
+authors = [
+    { name = "SEIAROTg", email = "seiarotg@gmail.com" }
+]
+requires-python = ">=3.9"
+dependencies = [
+    "fastapi>=0.128.0",
+    "pydantic>=2.12.5",
+    "python-multipart>=0.0.20",
+    "ruamel-yaml>=0.19.1",
+    "uvicorn>=0.39.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.22,<0.10.0"]
+build-backend = "uv_build"
