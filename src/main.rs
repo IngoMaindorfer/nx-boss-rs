@@ -17,7 +17,7 @@ struct Cli {
     #[arg(short, long, help = "Path to config YAML")]
     config: PathBuf,
 
-    #[arg(long, default_value = "127.0.0.1")]
+    #[arg(long, default_value = "0.0.0.0")]
     host: String,
 
     #[arg(long, default_value = "10447")]

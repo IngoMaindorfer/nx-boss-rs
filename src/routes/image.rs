@@ -238,6 +238,27 @@ mod tests {
         assert_eq!(resp.status_code(), 200);
     }
 
+    /// Images from the scanner are 2-4 MB each. Axum's default body limit is 2 MB,
+    /// which would truncate the stream and cause "failed to read stream". The router
+    /// must raise the limit to at least 100 MB.
+    #[tokio::test]
+    async fn test_image_upload_large_image_over_2mb() {
+        let (server, _tmp) = test_server();
+        let batch_id = create_batch(&server).await;
+        let boundary = "largeboundary";
+        let param = json!({"batch_id": batch_id}).to_string();
+        // 3 MB of fake image data — well above axum's 2 MB default limit
+        let image = vec![0u8; 3 * 1024 * 1024];
+        let body = multipart_body(boundary, &image, "big.jpg", &param);
+
+        let resp = server
+            .post("/NmWebService/image")
+            .content_type(&format!("multipart/form-data; boundary={boundary}"))
+            .bytes(body.into())
+            .await;
+        assert_eq!(resp.status_code(), 200);
+    }
+
     /// Content-Type with uppercase Multipart/ prefix must not be clobbered by force_json.
     ///
     /// This test is RED until force_json uses a case-insensitive check.

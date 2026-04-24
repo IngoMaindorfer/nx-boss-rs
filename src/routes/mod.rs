@@ -1,7 +1,7 @@
 use crate::state::AppState;
 use axum::{
     Router,
-    extract::Request,
+    extract::{DefaultBodyLimit, Request},
     http::header,
     middleware::{self, Next},
     response::Response,
@@ -72,6 +72,7 @@ pub fn router(state: AppState) -> Router {
             delete(scanner::delete_accesstoken),
         )
         .layer(middleware::from_fn(force_json))
+        .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100 MB
         .layer(trace_layer)
         .with_state(state)
 }
