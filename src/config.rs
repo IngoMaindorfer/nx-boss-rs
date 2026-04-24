@@ -109,9 +109,8 @@ impl Job {
             .unwrap_or("rgb24")
     }
 
-    pub fn duplex(&self) -> bool {
-        // "feederFront" = simplex; "feeder" (default) = duplex
-        self.sources()["source"].as_str() != Some("feederFront")
+    pub fn source(&self) -> &str {
+        self.sources()["source"].as_str().unwrap_or("feeder")
     }
 
     pub fn to_raw(&self) -> (String, RawJob) {
@@ -121,8 +120,7 @@ impl Job {
         pf.insert("pixelFormat".to_string(), json!(self.pixel_format()));
         let mut scan_settings = HashMap::new();
         scan_settings.insert("pixelFormats".to_string(), json!(pf));
-        let source = if self.duplex() { "feeder" } else { "front" };
-        scan_settings.insert("source".to_string(), json!(source));
+        scan_settings.insert("source".to_string(), json!(self.source()));
         (
             self.name().to_string(),
             RawJob {

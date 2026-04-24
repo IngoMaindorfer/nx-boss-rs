@@ -65,10 +65,11 @@
     </div>
 
     <div class="field">
-      <label for="duplex">Scanmodus</label>
-      <select id="duplex" name="duplex">
-        <option value="true"  {% if duplex  %}selected{% endif %}>Doppelseitig</option>
-        <option value="false" {% if !duplex %}selected{% endif %}>Einseitig</option>
+      <label for="source">Scanmodus</label>
+      <select id="source" name="source">
+        <option value="feeder"      {% if source == "feeder"      %}selected{% endif %}>Doppelseitig</option>
+        <option value="feederFront" {% if source == "feederFront" %}selected{% endif %}>Einseitig (Vorderseite)</option>
+        <option value="feederRear"  {% if source == "feederRear"  %}selected{% endif %}>Einseitig (Rückseite)</option>
       </select>
     </div>
 
