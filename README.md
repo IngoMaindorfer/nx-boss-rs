@@ -10,7 +10,7 @@ Compatible network server for Panasonic PaperStream NX Manager, written in Rust.
 - Configurable scan jobs via YAML (live CRUD through the web UI)
 - Removes the 400 dpi limit imposed by the official software
 - Scanned files stored locally with JSON metadata per batch (UUID v6, time-sortable)
-- Optional PDF delivery to a Paperless-ngx consume folder
+- Optional PDF delivery to a Paperless-ngx consume folder (blank-page filtering is intentionally delegated to Paperless — the fi-7300NX has no hardware blank-page-skip support)
 - Web UI: dashboard, scan-job management, scan browser with JPEG thumbnails
 - Graceful shutdown on SIGINT/SIGTERM
 

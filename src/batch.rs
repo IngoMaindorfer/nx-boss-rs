@@ -129,6 +129,9 @@ impl Batch {
     }
 
     fn deliver_pdf(&self, consume_path: &Path) -> Result<()> {
+        // Blank-page filtering is intentionally left to Paperless-NGX (consume pipeline).
+        // The fi-7300NX does not support blankPageSkip in hardware and we avoid
+        // duplicating post-processing that the consumer already handles.
         let pages: Vec<Vec<u8>> = self
             .metadata
             .files
@@ -151,13 +154,49 @@ impl Batch {
             })
             .collect();
         let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        let filename = format!("{safe_name}_{ts}.pdf");
-        let dest = consume_path.join(&filename);
-        std::fs::write(&dest, pdf)?;
+        let base = format!("{safe_name}_{ts}");
+
+        // Normalise job name to a slug for the tag (e.g. "My Job" → "my-job")
+        let tag: String = self
+            .metadata
+            .job_name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() {
+                    c.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        let created_date = &self.metadata.created_at.get(..10).unwrap_or("");
+        let sidecar = serde_json::json!({
+            "title": format!("{} {}", self.metadata.job_name, created_date),
+            "created": created_date,
+            "tags": ["scan", tag],
+            "correspondent": null,
+            "custom_fields": {
+                "batch_id": &self.id,
+                "pages": self.metadata.files.len(),
+                "resolution": self.metadata.job_config.resolution,
+                "pixel_format": &self.metadata.job_config.pixel_format,
+                "source": &self.metadata.job_config.source,
+                "scanner_model": self.metadata.scanner.model.as_deref().unwrap_or(""),
+            }
+        });
+
+        // Write JSON sidecar first — present before PDF triggers Paperless consumption.
+        // A pre-consume script can read {basename}.json to set title/tags via the API.
+        let json_path = consume_path.join(format!("{base}.json"));
+        std::fs::write(&json_path, serde_json::to_string_pretty(&sidecar)?)?;
+
+        let pdf_path = consume_path.join(format!("{base}.pdf"));
+        std::fs::write(&pdf_path, pdf)?;
+
         tracing::info!(
-            filename = %filename,
+            filename = %format!("{base}.pdf"),
             pages = self.metadata.files.len(),
-            "PDF delivered to consume folder"
+            "PDF + JSON sidecar delivered to consume folder"
         );
         Ok(())
     }
