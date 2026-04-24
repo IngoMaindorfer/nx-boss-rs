@@ -34,7 +34,8 @@ async fn main() -> Result<()> {
     let config = config::Config::load(&cli.config)?;
     info!("Loaded {} job(s)", config.jobs.len());
 
-    let state = state::AppState::new(config);
+    let config_path = cli.config.canonicalize().unwrap_or(cli.config.clone());
+    let state = state::AppState::new(config).with_config_path(config_path);
     let app = routes::router(state);
 
     let addr = format!("{}:{}", cli.host, cli.port);

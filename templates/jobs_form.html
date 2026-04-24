@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h2>{% if editing %}Job bearbeiten{% else %}Neuer Job{% endif %}</h2>
+</div>
+
+<div class="card">
+  {% if let Some(msg) = error %}
+  <div class="alert-error">{{ msg }}</div>
+  {% endif %}
+
+  <form class="edit-form"
+        {% if editing %}
+        hx-post="/jobs/{{ job_id }}"
+        {% else %}
+        hx-post="/jobs"
+        {% endif %}
+        hx-push-url="true">
+
+    <div class="field">
+      <label for="name">Name</label>
+      <input id="name" name="name" type="text" value="{{ name }}" required>
+    </div>
+
+    <div class="field">
+      <label for="color">Farbe</label>
+      <input id="color" name="color" type="color" value="{{ color }}">
+    </div>
+
+    <div class="field">
+      <label for="output_path">Ausgabepfad</label>
+      <input id="output_path" name="output_path" type="text" value="{{ output_path }}" required
+             placeholder="/pfad/zum/ordner">
+    </div>
+
+    <div class="field">
+      <label for="consume_path">Consume-Pfad (optional)</label>
+      <input id="consume_path" name="consume_path" type="text" value="{{ consume_path }}"
+             placeholder="z.B. /pfad/zum/paperless/consume">
+    </div>
+
+    <div class="field">
+      <label for="resolution">Auflösung (DPI)</label>
+      <select id="resolution" name="resolution">
+        <option value="150"  {% if resolution == 150  %}selected{% endif %}>150 DPI</option>
+        <option value="200"  {% if resolution == 200  %}selected{% endif %}>200 DPI</option>
+        <option value="300"  {% if resolution == 300  %}selected{% endif %}>300 DPI</option>
+        <option value="400"  {% if resolution == 400  %}selected{% endif %}>400 DPI</option>
+        <option value="600"  {% if resolution == 600  %}selected{% endif %}>600 DPI</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="jpeg_quality">JPEG-Qualität</label>
+      <input id="jpeg_quality" name="jpeg_quality" type="number" min="50" max="100"
+             value="{{ jpeg_quality }}">
+    </div>
+
+    <div class="field">
+      <label for="pixel_format">Farbmodus</label>
+      <select id="pixel_format" name="pixel_format">
+        <option value="rgb24"  {% if pixel_format == "rgb24"  %}selected{% endif %}>Farbe (RGB)</option>
+        <option value="gray8"  {% if pixel_format == "gray8"  %}selected{% endif %}>Graustufen</option>
+      </select>
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Speichern</button>
+      <a href="/jobs" class="btn btn-secondary">Abbrechen</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

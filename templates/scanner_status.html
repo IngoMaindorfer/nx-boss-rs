@@ -1,0 +1,11 @@
+{% if online %}
+<span id="scanner-status" class="badge badge-online"
+      hx-get="/api/scanner-status" hx-trigger="every 10s" hx-swap="outerHTML">
+  online &mdash; {{ name }}
+</span>
+{% else %}
+<span id="scanner-status" class="badge badge-offline"
+      hx-get="/api/scanner-status" hx-trigger="every 10s" hx-swap="outerHTML">
+  offline
+</span>
+{% endif %}

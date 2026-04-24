@@ -9,7 +9,8 @@ use tracing::{debug, info};
 use crate::batch::now_iso;
 use crate::state::AppState;
 
-pub async fn heartbeat() -> Json<Value> {
+pub async fn heartbeat(State(state): State<AppState>) -> Json<Value> {
+    *state.last_scanner_ping.lock().unwrap() = Some(chrono::Local::now());
     debug!("heartbeat");
     Json(json!({ "system_time": now_iso() }))
 }
@@ -27,7 +28,12 @@ pub struct DevicePayload {
     pub serial_no: String,
 }
 
-pub async fn device(Json(payload): Json<DevicePayload>) -> Json<Value> {
+pub async fn device(
+    State(state): State<AppState>,
+    Json(payload): Json<DevicePayload>,
+) -> Json<Value> {
+    *state.last_scanner_ping.lock().unwrap() = Some(chrono::Local::now());
+    *state.scanner_name.lock().unwrap() = Some(payload.scanner_name.clone());
     info!(
         scanner_name = %payload.scanner_name,
         scanner_model = %payload.scanner_model,
@@ -49,14 +55,13 @@ pub async fn get_authorization(Query(_q): Query<AuthQuery>) -> Json<Value> {
 }
 
 pub async fn post_authorization(State(state): State<AppState>) -> Json<Value> {
-    let job_names: Vec<&str> = state
-        .config
-        .jobs
+    let jobs = state.jobs.lock().unwrap();
+    let job_names: Vec<&str> = jobs
         .iter()
         .filter_map(|j| j.job_info["name"].as_str())
         .collect();
     info!(jobs = ?job_names, "scanner fetched job list");
-    let job_info: Vec<&Value> = state.config.jobs.iter().map(|j| &j.job_info).collect();
+    let job_info: Vec<&Value> = jobs.iter().map(|j| &j.job_info).collect();
     Json(json!({
         "access_token": "unused",
         "token_type": "bearer",
@@ -74,11 +79,10 @@ pub async fn scansetting(
     Query(q): Query<ScanSettingQuery>,
     State(state): State<AppState>,
 ) -> Json<Value> {
-    let job_name = state.config.jobs[q.job_id].job_info["name"]
-        .as_str()
-        .unwrap_or("?");
+    let jobs = state.jobs.lock().unwrap();
+    let job_name = jobs[q.job_id].job_info["name"].as_str().unwrap_or("?");
     debug!(job_id = q.job_id, job_name, "scansetting requested");
-    Json(state.config.jobs[q.job_id].scan_settings.clone())
+    Json(jobs[q.job_id].scan_settings.clone())
 }
 
 pub async fn delete_accesstoken() -> Json<Value> {

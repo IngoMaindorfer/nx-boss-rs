@@ -23,6 +23,8 @@ thiserror = "2"
 lopdf = "0.34"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+askama = "0.12"
+indexmap = { version = "2", features = ["serde"] }
 
 [dev-dependencies]
 axum-test = "20"

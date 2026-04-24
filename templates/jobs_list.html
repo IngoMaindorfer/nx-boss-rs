@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h2>Scan-Jobs</h2>
+  <a href="/jobs/new" class="btn btn-primary">Neuer Job</a>
+</div>
+
+<div class="card">
+  {% if jobs.is_empty() %}
+    <p class="empty">Keine Jobs konfiguriert.</p>
+  {% else %}
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Auflösung</th>
+        <th>Farbe</th>
+        <th>Ausgabepfad</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for job in jobs %}
+      <tr>
+        <td>
+          <span class="color-dot" style="background:{{ job.color }}"></span>
+          {{ job.name }}
+        </td>
+        <td>{{ job.resolution }} DPI</td>
+        <td>{% if job.pixel_format == "rgb24" %}Farbe{% else %}Graustufen{% endif %}</td>
+        <td style="font-size:.8rem;color:#6c757d">{{ job.output_path }}</td>
+        <td style="white-space:nowrap">
+          <a href="/jobs/{{ job.id }}/edit" class="btn btn-sm btn-secondary">Bearbeiten</a>
+          <button class="btn btn-sm btn-danger"
+                  hx-delete="/jobs/{{ job.id }}"
+                  hx-confirm="Job &quot;{{ job.name }}&quot; wirklich löschen?"
+                  hx-target="body"
+                  hx-push-url="/jobs">Löschen</button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endblock %}

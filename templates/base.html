@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>nx-boss</title>
+  <script src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; display: flex; min-height: 100vh; background: #f0f2f5; color: #212529; }
+    nav { width: 220px; min-height: 100vh; background: #1a237e; color: #fff; padding: 1.5rem 1rem; display: flex; flex-direction: column; gap: .25rem; flex-shrink: 0; }
+    nav .logo { font-size: 1.1rem; font-weight: 700; padding: .5rem .75rem; margin-bottom: 1rem; letter-spacing: .04em; }
+    nav a { display: block; padding: .5rem .75rem; color: rgba(255,255,255,.75); text-decoration: none; border-radius: 6px; font-size: .9rem; }
+    nav a:hover, nav a.active { background: rgba(255,255,255,.15); color: #fff; }
+    main { flex: 1; padding: 2rem; max-width: 1100px; }
+    h2 { font-size: 1.4rem; font-weight: 600; margin-bottom: 1.5rem; color: #1a237e; }
+    h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 1rem; }
+    .card { background: #fff; border-radius: 10px; padding: 1.5rem; margin-bottom: 1.25rem; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; padding: .6rem 1rem; font-size: .78rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: #6c757d; border-bottom: 2px solid #dee2e6; }
+    td { padding: .75rem 1rem; border-bottom: 1px solid #f0f2f5; font-size: .9rem; vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    .btn { display: inline-block; padding: .4rem .9rem; border-radius: 6px; border: none; cursor: pointer; font-size: .875rem; font-weight: 500; text-decoration: none; transition: opacity .15s; }
+    .btn:hover { opacity: .85; }
+    .btn-primary { background: #1a237e; color: #fff; }
+    .btn-secondary { background: #6c757d; color: #fff; }
+    .btn-danger  { background: #c62828; color: #fff; }
+    .btn-sm { padding: .25rem .6rem; font-size: .8rem; }
+    .badge { display: inline-flex; align-items: center; gap: .3rem; padding: .2rem .6rem; border-radius: 20px; font-size: .78rem; font-weight: 600; }
+    .badge::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; }
+    .badge-online  { background: #e8f5e9; color: #2e7d32; } .badge-online::before  { background: #2e7d32; }
+    .badge-offline { background: #fce4ec; color: #c62828; } .badge-offline::before { background: #c62828; }
+    .color-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; vertical-align: middle; margin-right: .4rem; border: 1px solid rgba(0,0,0,.15); }
+    form.edit-form { display: grid; gap: 1rem; max-width: 540px; }
+    .field { display: grid; gap: .3rem; }
+    label { font-size: .85rem; font-weight: 500; color: #495057; }
+    input[type=text], input[type=number], select { padding: .45rem .75rem; border: 1px solid #ced4da; border-radius: 6px; font-size: .9rem; width: 100%; }
+    input[type=color] { padding: .2rem .4rem; height: 2.2rem; border: 1px solid #ced4da; border-radius: 6px; cursor: pointer; }
+    input:focus, select:focus { outline: 2px solid #1a237e; outline-offset: 1px; border-color: transparent; }
+    .form-actions { display: flex; gap: .75rem; margin-top: .5rem; }
+    .alert-error { background: #fce4ec; color: #b71c1c; padding: .75rem 1rem; border-radius: 6px; font-size: .875rem; margin-bottom: 1rem; }
+    .empty { color: #6c757d; font-size: .9rem; padding: 1rem 0; }
+    .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+    .page-header h2 { margin-bottom: 0; }
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+    .stat { background: #fff; border-radius: 10px; padding: 1.25rem 1.5rem; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+    .stat-value { font-size: 2rem; font-weight: 700; color: #1a237e; line-height: 1; }
+    .stat-label { font-size: .8rem; color: #6c757d; margin-top: .25rem; }
+    .thumbnail { width: 60px; height: 60px; object-fit: cover; border-radius: 4px; border: 1px solid #dee2e6; }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="logo">nx-boss</div>
+    <a href="/">Dashboard</a>
+    <a href="/jobs">Scan-Jobs</a>
+    <a href="/scans">Scans</a>
+  </nav>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

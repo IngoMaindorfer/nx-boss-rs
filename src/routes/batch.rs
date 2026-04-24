@@ -40,7 +40,8 @@ pub async fn post_batch(
         }
     };
 
-    if job_id >= state.config.jobs.len() {
+    let jobs = state.jobs.lock().unwrap();
+    if job_id >= jobs.len() {
         warn!(job_id, "post_batch: job_id out of range");
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -49,11 +50,12 @@ pub async fn post_batch(
             .into_response();
     }
 
-    let job = &state.config.jobs[job_id];
-    match Batch::create(job) {
+    let job = jobs[job_id].clone();
+    drop(jobs);
+    match Batch::create(&job) {
         Ok(batch) => {
             let id = batch.id.clone();
-            let job_name = job.job_info["name"].as_str().unwrap_or("?");
+            let job_name = job.job_info["name"].as_str().unwrap_or("?").to_string();
             info!(batch_id = %id, job_id, job_name, "batch created");
             state.batches.lock().unwrap().insert(id.clone(), batch);
             (StatusCode::OK, Json(json!({ "batch_id": id }))).into_response()

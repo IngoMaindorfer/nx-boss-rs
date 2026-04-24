@@ -9,10 +9,15 @@ use axum::{
 };
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::Level;
+use ui::{
+    dashboard, jobs_create, jobs_delete, jobs_edit, jobs_list, jobs_new, jobs_update,
+    scanner_status, scans_detail, scans_file, scans_list,
+};
 
 mod batch;
 mod image;
 mod scanner;
+pub mod ui;
 
 // Scanner sends requests without Content-Type: application/json.
 // Force it for all non-multipart requests so Axum's Json extractor accepts them.
@@ -27,6 +32,7 @@ async fn force_json(mut req: Request, next: Next) -> Response {
 
     match ct.as_deref() {
         Some(s) if s.starts_with("multipart/form-data") => {}
+        Some(s) if s.starts_with("application/x-www-form-urlencoded") => {}
         Some(s) if s.starts_with("multipart/") => {
             // Preserve the boundary parameter while normalising the subtype.
             let boundary_param = s
@@ -53,6 +59,19 @@ pub fn router(state: AppState) -> Router {
         .on_response(DefaultOnResponse::new().level(Level::INFO));
 
     Router::new()
+        // UI
+        .route("/", get(dashboard))
+        .route("/api/scanner-status", get(scanner_status))
+        .route("/jobs", get(jobs_list))
+        .route("/jobs/new", get(jobs_new))
+        .route("/jobs", post(jobs_create))
+        .route("/jobs/{id}/edit", get(jobs_edit))
+        .route("/jobs/{id}", post(jobs_update))
+        .route("/jobs/{id}", delete(jobs_delete))
+        .route("/scans", get(scans_list))
+        .route("/scans/{id}", get(scans_detail))
+        .route("/scans/{id}/files/{filename}", get(scans_file))
+        // Scanner protocol
         .route("/NmWebService/heartbeat", get(scanner::heartbeat))
         .route("/NmWebService/device", post(scanner::device))
         .route(

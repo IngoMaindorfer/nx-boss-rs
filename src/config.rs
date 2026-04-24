@@ -2,22 +2,27 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 static DEFAULTS_YAML: &str = include_str!("../defaults.yaml");
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct RawConfig {
-    pub jobs: HashMap<String, RawJob>,
+    pub jobs: IndexMap<String, RawJob>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct RawJob {
     pub output_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub consume_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub job_settings: Option<HashMap<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scan_settings: Option<HashMap<String, Value>>,
 }
 
@@ -51,9 +56,81 @@ impl Config {
             .collect::<Result<Vec<_>>>()?;
         Ok(Self { jobs })
     }
+
+    pub fn save(jobs: &[Job], path: &Path) -> Result<()> {
+        let mut map = IndexMap::new();
+        for job in jobs {
+            let (name, raw) = job.to_raw();
+            map.insert(name, raw);
+        }
+        let raw = RawConfig { jobs: map };
+        let yaml = serde_yaml::to_string(&raw).context("serializing config")?;
+        std::fs::write(path, yaml).context("writing config file")?;
+        Ok(())
+    }
 }
 
 impl Job {
+    pub fn name(&self) -> &str {
+        self.job_info["name"].as_str().unwrap_or("")
+    }
+
+    pub fn color(&self) -> &str {
+        self.job_info["color"].as_str().unwrap_or("#4D4D4D")
+    }
+
+    fn sources(&self) -> &Value {
+        &self.scan_settings["parameters"]["task"]["actions"]["streams"]["sources"]
+    }
+
+    fn pf_attr(&self, name: &str) -> Option<&str> {
+        self.sources()["pixelFormats"]["attributes"]
+            .as_array()?
+            .iter()
+            .find(|a| a["attribute"].as_str() == Some(name))
+            .and_then(|a| a["values"]["value"].as_str())
+    }
+
+    pub fn resolution(&self) -> u32 {
+        self.pf_attr("resolution")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(300)
+    }
+
+    pub fn jpeg_quality(&self) -> u8 {
+        self.pf_attr("jpegQuality")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(80)
+    }
+
+    pub fn pixel_format(&self) -> &str {
+        self.sources()["pixelFormats"]["pixelFormat"]
+            .as_str()
+            .unwrap_or("rgb24")
+    }
+
+    pub fn to_raw(&self) -> (String, RawJob) {
+        let mut pf = HashMap::new();
+        pf.insert("resolution".to_string(), json!(self.resolution()));
+        pf.insert("jpegQuality".to_string(), json!(self.jpeg_quality()));
+        pf.insert("pixelFormat".to_string(), json!(self.pixel_format()));
+        let mut scan_settings = HashMap::new();
+        scan_settings.insert("pixelFormats".to_string(), json!(pf));
+        (
+            self.name().to_string(),
+            RawJob {
+                output_path: self.output_path.to_string_lossy().to_string(),
+                consume_path: self
+                    .consume_path
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string()),
+                color: Some(self.color().to_string()),
+                job_settings: None,
+                scan_settings: Some(scan_settings),
+            },
+        )
+    }
+
     fn parse(id: usize, name: String, raw: RawJob) -> Result<Self> {
         let output_path = PathBuf::from(&raw.output_path);
         if !output_path.is_dir() {

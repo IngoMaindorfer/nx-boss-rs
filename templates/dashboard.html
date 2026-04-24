@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h2>Dashboard</h2>
+  <div id="scanner-status"
+       hx-get="/api/scanner-status"
+       hx-trigger="load, every 10s"
+       hx-swap="outerHTML">
+    <span class="badge badge-offline">offline</span>
+  </div>
+</div>
+
+<div class="stat-grid">
+  <div class="stat">
+    <div class="stat-value">{{ recent_scans.len() }}</div>
+    <div class="stat-label">Letzte Scans</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">{{ jobs.len() }}</div>
+    <div class="stat-label">Scan-Jobs</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value" style="font-size:1rem">{{ scanner_name }}</div>
+    <div class="stat-label">Scanner</div>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Scan-Jobs</h3>
+  {% if jobs.is_empty() %}
+    <p class="empty">Keine Jobs konfiguriert. <a href="/jobs/new">Jetzt anlegen</a></p>
+  {% else %}
+  <ul style="list-style:none;display:flex;flex-wrap:wrap;gap:.5rem">
+    {% for job in jobs %}
+    <li>
+      <span class="color-dot" style="background:{{ job.color }}"></span>
+      <a href="/jobs/{{ job.id }}/edit">{{ job.name }}</a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h3>Letzte Scans</h3>
+  {% if recent_scans.is_empty() %}
+    <p class="empty">Noch keine Scans vorhanden.</p>
+  {% else %}
+  <table>
+    <thead>
+      <tr>
+        <th>Datum</th>
+        <th>Job</th>
+        <th>Seiten</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for scan in recent_scans %}
+      <tr>
+        <td>{{ scan.created_at }}</td>
+        <td>{{ scan.job_name }}</td>
+        <td>{{ scan.page_count }}</td>
+        <td>{% if scan.completed %}abgeschlossen{% else %}offen{% endif %}</td>
+        <td><a href="/scans/{{ scan.batch_id }}" class="btn btn-sm btn-secondary">Details</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endblock %}

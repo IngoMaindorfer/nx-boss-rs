@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h2>Scans</h2>
+</div>
+
+<div class="card">
+  {% if scans.is_empty() %}
+    <p class="empty">Noch keine Scans vorhanden.</p>
+  {% else %}
+  <table>
+    <thead>
+      <tr>
+        <th>Datum</th>
+        <th>Job</th>
+        <th>Seiten</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for scan in scans %}
+      <tr>
+        <td>{{ scan.created_at }}</td>
+        <td>{{ scan.job_name }}</td>
+        <td>{{ scan.page_count }}</td>
+        <td>{% if scan.completed %}abgeschlossen{% else %}offen{% endif %}</td>
+        <td><a href="/scans/{{ scan.batch_id }}" class="btn btn-sm btn-secondary">Details</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endblock %}

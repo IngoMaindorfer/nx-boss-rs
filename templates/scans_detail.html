@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h2>Scan-Details</h2>
+  <a href="/scans" class="btn btn-secondary">Zurück</a>
+</div>
+
+<div class="card">
+  <table style="max-width:400px">
+    <tr><th>Batch-ID</th><td style="font-family:monospace;font-size:.85rem">{{ batch_id }}</td></tr>
+    <tr><th>Job</th><td>{{ job_name }}</td></tr>
+    <tr><th>Erstellt</th><td>{{ created_at }}</td></tr>
+    <tr><th>Seiten</th><td>{{ files.len() }}</td></tr>
+    <tr><th>Status</th><td>{% if completed %}abgeschlossen{% else %}offen{% endif %}</td></tr>
+  </table>
+</div>
+
+{% if !files.is_empty() %}
+<div class="card">
+  <h3>Seiten</h3>
+  <div style="display:flex;flex-wrap:wrap;gap:1rem;margin-top:.5rem">
+    {% for filename in files %}
+    <div style="text-align:center">
+      <a href="/scans/{{ batch_id }}/files/{{ filename }}" target="_blank">
+        <img src="/scans/{{ batch_id }}/files/{{ filename }}"
+             class="thumbnail" alt="{{ filename }}">
+      </a>
+      <div style="font-size:.75rem;color:#6c757d;margin-top:.25rem">{{ filename }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}
