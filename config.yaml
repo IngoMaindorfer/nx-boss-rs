@@ -1,10 +1,10 @@
 jobs:
   TestJob:
     output_path: /home/ingo/nx-boss/scans
-    color: '#4D4D4D'
+    color: '#a51d2d'
     scan_settings:
-      source: feeder
       pixelFormats:
         jpegQuality: 80
         pixelFormat: rgb24
         resolution: 300
+      source: front

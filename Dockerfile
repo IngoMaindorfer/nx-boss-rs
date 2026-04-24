@@ -10,16 +10,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
 COPY defaults.yaml ./
+COPY templates/ templates/
 
 RUN cargo build --release --target x86_64-unknown-linux-musl
 
 
 FROM scratch
 
-COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/nx-boss /nx-boss
+COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/nx-boss-rs /nx-boss-rs
 
 VOLUME ["/data", "/config"]
 EXPOSE 10447
 
-ENTRYPOINT ["/nx-boss"]
+ENTRYPOINT ["/nx-boss-rs"]
 CMD ["--config", "/config/config.yaml", "--host", "0.0.0.0", "--port", "10447"]

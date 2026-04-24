@@ -110,8 +110,8 @@ impl Job {
     }
 
     pub fn duplex(&self) -> bool {
-        // "front" means simplex; everything else (incl. default "feeder") is duplex
-        self.sources()["source"].as_str() != Some("front")
+        // "feederFront" = simplex; "feeder" (default) = duplex
+        self.sources()["source"].as_str() != Some("feederFront")
     }
 
     pub fn to_raw(&self) -> (String, RawJob) {

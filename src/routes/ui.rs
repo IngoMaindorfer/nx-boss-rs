@@ -466,7 +466,7 @@ fn job_form_to_yaml(form: &JobFormData) -> String {
     let source = if form.duplex == "true" {
         "feeder"
     } else {
-        "front"
+        "feederFront"
     };
     format!(
         "jobs:\n  {}:\n    output_path: {}\n{}    color: '{}'\n    scan_settings:\n      source: {}\n      pixelFormats:\n        resolution: {}\n        jpegQuality: {}\n        pixelFormat: {}\n",
