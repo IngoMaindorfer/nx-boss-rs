@@ -1,5 +1,4 @@
 .venv/
-.git/
 .pre-commit-config.yaml
 tests/
 *.pyc

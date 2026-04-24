@@ -7,13 +7,13 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never
 
-COPY pyproject.toml uv.lock ./
-COPY src/ src/
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 
-# hatch-vcs needs a git tag to determine the version.
-# Without .git in the build context, pass it as a build arg instead.
-ARG VERSION=0.0.0.dev0
-RUN SETUPTOOLS_SCM_PRETEND_VERSION_FOR_NX_BOSS=${VERSION} uv sync --no-dev --no-editable
+COPY pyproject.toml uv.lock README.md ./
+COPY src/ src/
+COPY .git/ .git/
+
+RUN uv sync --no-dev --no-editable
 
 
 FROM python:3.14-slim

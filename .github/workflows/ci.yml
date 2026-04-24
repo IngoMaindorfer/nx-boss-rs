@@ -52,6 +52,5 @@ jobs:
           context: .
           push: false
           tags: nx-boss:ci
-          build-args: VERSION=0.0.0.dev0
           cache-from: type=gha
           cache-to: type=gha,mode=max
