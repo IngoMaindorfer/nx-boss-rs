@@ -15,6 +15,7 @@
     <tr><th>Auflösung</th><td>{{ resolution }} DPI</td></tr>
     <tr><th>Farbmodus</th><td>{{ pixel_format }}</td></tr>
     <tr><th>JPEG-Qualität</th><td>{{ jpeg_quality }}</td></tr>
+    <tr><th>Scanmodus</th><td>{% if duplex %}Doppelseitig{% else %}Einseitig{% endif %}</td></tr>
     {% if let Some(model) = scanner_model %}
     <tr><th>Scanner-Modell</th><td>{{ model }}</td></tr>
     {% endif %}

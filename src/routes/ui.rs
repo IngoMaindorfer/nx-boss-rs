@@ -35,6 +35,7 @@ pub struct ScanEntry {
     pub completed: bool,
     pub resolution: u32,
     pub pixel_format: String,
+    pub duplex: bool,
     pub scanner_model: Option<String>,
 }
 
@@ -45,6 +46,7 @@ pub struct JobRow {
     pub output_path: String,
     pub resolution: u32,
     pub pixel_format: String,
+    pub duplex: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -89,6 +91,7 @@ struct JobsFormTpl {
     resolution: u32,
     jpeg_quality: u8,
     pixel_format: String,
+    duplex: bool,
     error: Option<String>,
 }
 
@@ -111,6 +114,7 @@ struct ScansDetailTpl {
     resolution: u32,
     pixel_format: String,
     jpeg_quality: u8,
+    duplex: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -143,6 +147,7 @@ fn list_scans(jobs: &[Job], limit: usize) -> Vec<ScanEntry> {
                         completed: meta.completed,
                         resolution: meta.job_config.resolution,
                         pixel_format: meta.job_config.pixel_format,
+                        duplex: meta.job_config.duplex,
                         scanner_model: meta.scanner.model,
                     });
                 }
@@ -178,6 +183,7 @@ fn job_rows(jobs: &[Job]) -> Vec<JobRow> {
             output_path: j.output_path.to_string_lossy().to_string(),
             resolution: j.resolution(),
             pixel_format: j.pixel_format().to_string(),
+            duplex: j.duplex(),
         })
         .collect()
 }
@@ -234,6 +240,7 @@ pub async fn jobs_new() -> Response {
         resolution: 300,
         jpeg_quality: 80,
         pixel_format: "rgb24".to_string(),
+        duplex: true,
         error: None,
     })
 }
@@ -248,6 +255,13 @@ pub struct JobFormData {
     pub resolution: u32,
     pub jpeg_quality: u8,
     pub pixel_format: String,
+    // HTML select sends "true"/"false" strings
+    #[serde(default = "default_duplex")]
+    pub duplex: String,
+}
+
+fn default_duplex() -> String {
+    "true".to_string()
 }
 
 pub async fn jobs_create(State(state): State<AppState>, Form(form): Form<JobFormData>) -> Response {
@@ -305,6 +319,7 @@ pub async fn jobs_edit(Path(id): Path<usize>, State(state): State<AppState>) -> 
         resolution: job.resolution(),
         jpeg_quality: job.jpeg_quality(),
         pixel_format: job.pixel_format().to_string(),
+        duplex: job.duplex(),
         error: None,
     })
 }
@@ -391,7 +406,12 @@ pub async fn scans_detail(Path(batch_id): Path<String>, State(state): State<AppS
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     let files: Vec<String> = meta.files.iter().map(|f| f.filename.clone()).collect();
-    let JobConfig { resolution, pixel_format, jpeg_quality } = meta.job_config;
+    let JobConfig {
+        resolution,
+        pixel_format,
+        jpeg_quality,
+        duplex,
+    } = meta.job_config;
     render(ScansDetailTpl {
         batch_id,
         job_name: meta.job_name,
@@ -403,6 +423,7 @@ pub async fn scans_detail(Path(batch_id): Path<String>, State(state): State<AppS
         resolution,
         pixel_format,
         jpeg_quality,
+        duplex,
     })
 }
 
@@ -442,12 +463,18 @@ fn job_form_to_yaml(form: &JobFormData) -> String {
     } else {
         format!("    consume_path: {}\n", form.consume_path.trim())
     };
+    let source = if form.duplex == "true" {
+        "feeder"
+    } else {
+        "front"
+    };
     format!(
-        "jobs:\n  {}:\n    output_path: {}\n{}    color: '{}'\n    scan_settings:\n      pixelFormats:\n        resolution: {}\n        jpegQuality: {}\n        pixelFormat: {}\n",
+        "jobs:\n  {}:\n    output_path: {}\n{}    color: '{}'\n    scan_settings:\n      source: {}\n      pixelFormats:\n        resolution: {}\n        jpegQuality: {}\n        pixelFormat: {}\n",
         form.name.trim(),
         form.output_path.trim(),
         consume_line,
         form.color,
+        source,
         form.resolution,
         form.jpeg_quality,
         form.pixel_format,
@@ -471,6 +498,7 @@ fn form_to_tpl(
         resolution: form.resolution,
         jpeg_quality: form.jpeg_quality,
         pixel_format: form.pixel_format.clone(),
+        duplex: form.duplex == "true",
     }
 }
 

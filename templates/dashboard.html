@@ -47,7 +47,7 @@
     <li>
       <span class="color-dot" style="background:{{ job.color }}"></span>
       <a href="/jobs/{{ job.id }}/edit">{{ job.name }}</a>
-      <span style="color:#999;font-size:.8rem">{{ job.resolution }} DPI &middot; {{ job.pixel_format }}</span>
+      <span style="color:#999;font-size:.8rem">{{ job.resolution }} DPI &middot; {{ job.pixel_format }} &middot; {% if job.duplex %}2-seitig{% else %}1-seitig{% endif %}</span>
     </li>
     {% endfor %}
   </ul>
@@ -67,6 +67,7 @@
         <th>Seiten</th>
         <th>DPI</th>
         <th>Farbe</th>
+        <th>Modus</th>
         <th>Scanner</th>
         <th>Status</th>
         <th></th>
@@ -80,6 +81,7 @@
         <td>{{ scan.page_count }}</td>
         <td>{{ scan.resolution }}</td>
         <td>{{ scan.pixel_format }}</td>
+        <td>{% if scan.duplex %}2-seitig{% else %}1-seitig{% endif %}</td>
         <td>{% if let Some(m) = scan.scanner_model %}{{ m }}{% else %}—{% endif %}</td>
         <td>{% if scan.completed %}abgeschlossen{% else %}offen{% endif %}</td>
         <td><a href="/scans/{{ scan.batch_id }}" class="btn btn-sm btn-secondary">Details</a></td>

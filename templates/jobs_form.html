@@ -64,6 +64,14 @@
       </select>
     </div>
 
+    <div class="field">
+      <label for="duplex">Scanmodus</label>
+      <select id="duplex" name="duplex">
+        <option value="true"  {% if duplex  %}selected{% endif %}>Doppelseitig</option>
+        <option value="false" {% if !duplex %}selected{% endif %}>Einseitig</option>
+      </select>
+    </div>
+
     <div class="form-actions">
       <button type="submit" class="btn btn-primary">Speichern</button>
       <a href="/jobs" class="btn btn-secondary">Abbrechen</a>

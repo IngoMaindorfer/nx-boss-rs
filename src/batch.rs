@@ -25,11 +25,17 @@ pub struct JobConfig {
     pub resolution: u32,
     pub pixel_format: String,
     pub jpeg_quality: u8,
+    pub duplex: bool,
 }
 
 impl Default for JobConfig {
     fn default() -> Self {
-        Self { resolution: 300, pixel_format: "rgb24".to_string(), jpeg_quality: 80 }
+        Self {
+            resolution: 300,
+            pixel_format: "rgb24".to_string(),
+            jpeg_quality: 80,
+            duplex: true,
+        }
     }
 }
 
@@ -78,6 +84,7 @@ impl Batch {
                 resolution: job.resolution(),
                 pixel_format: job.pixel_format().to_string(),
                 jpeg_quality: job.jpeg_quality(),
+                duplex: job.duplex(),
             },
         };
         let consume_path = job.consume_path.clone();
