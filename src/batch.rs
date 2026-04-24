@@ -53,15 +53,13 @@ impl Batch {
         Ok(batch)
     }
 
-    pub fn add_file(
-        &mut self,
-        filename: &str,
-        content: &[u8],
-        parameters: Value,
-    ) -> Result<()> {
+    pub fn add_file(&mut self, filename: &str, content: &[u8], parameters: Value) -> Result<()> {
         let file_path = self.dir.join(filename);
         // Reject path traversal: resolved parent must equal the batch dir
-        if file_path.canonicalize().unwrap_or(file_path.clone()).parent()
+        if file_path
+            .canonicalize()
+            .unwrap_or(file_path.clone())
+            .parent()
             != Some(self.dir.as_path())
             && !is_safe_path(&self.dir, &self.dir.join(filename))
         {
@@ -164,7 +162,9 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let job = make_job(tmp.path());
         let mut batch = Batch::create(&job).unwrap();
-        batch.add_file("page1.jpg", b"data", json!({"key": "val"})).unwrap();
+        batch
+            .add_file("page1.jpg", b"data", json!({"key": "val"}))
+            .unwrap();
         assert_eq!(batch.metadata().files.len(), 1);
         assert_eq!(batch.metadata().files[0].filename, "page1.jpg");
     }
@@ -215,7 +215,10 @@ mod tests {
     fn test_is_safe_path() {
         let base = Path::new("/output/batch");
         assert!(is_safe_path(base, Path::new("/output/batch/file.jpg")));
-        assert!(!is_safe_path(base, Path::new("/output/batch/../escape.txt")));
+        assert!(!is_safe_path(
+            base,
+            Path::new("/output/batch/../escape.txt")
+        ));
         assert!(!is_safe_path(base, Path::new("/etc/passwd")));
     }
 }

@@ -1,8 +1,8 @@
 use axum::{
+    Json,
     extract::{Multipart, State},
     http::StatusCode,
     response::IntoResponse,
-    Json,
 };
 use serde_json::json;
 
@@ -27,7 +27,7 @@ pub async fn post_image(
                             StatusCode::BAD_REQUEST,
                             Json(json!({ "error": e.to_string() })),
                         )
-                            .into_response()
+                            .into_response();
                     }
                 }
             }
@@ -38,7 +38,7 @@ pub async fn post_image(
                         StatusCode::BAD_REQUEST,
                         Json(json!({ "error": e.to_string() })),
                     )
-                        .into_response()
+                        .into_response();
                 }
             },
             // imageparameter field is accepted but not used
@@ -56,7 +56,7 @@ pub async fn post_image(
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": "missing image field" })),
             )
-                .into_response()
+                .into_response();
         }
     };
     let parameters: serde_json::Value = match parameter_bytes {
@@ -67,7 +67,7 @@ pub async fn post_image(
                     StatusCode::BAD_REQUEST,
                     Json(json!({ "error": format!("invalid parameter JSON: {e}") })),
                 )
-                    .into_response()
+                    .into_response();
             }
         },
         None => {
@@ -75,7 +75,7 @@ pub async fn post_image(
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": "missing parameter field" })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -86,7 +86,7 @@ pub async fn post_image(
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": "missing batch_id in parameter" })),
             )
-                .into_response()
+                .into_response();
         }
     };
 

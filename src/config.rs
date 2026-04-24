@@ -40,8 +40,7 @@ impl Config {
     }
 
     pub fn parse(yaml: &str) -> Result<Self> {
-        let raw: RawConfig =
-            serde_yaml::from_str(yaml).context("parsing config YAML")?;
+        let raw: RawConfig = serde_yaml::from_str(yaml).context("parsing config YAML")?;
         let jobs = raw
             .jobs
             .into_iter()
@@ -71,7 +70,11 @@ impl Job {
             "hierarchy_list": null,
         });
 
-        Ok(Self { output_path, job_info, scan_settings })
+        Ok(Self {
+            output_path,
+            job_info,
+            scan_settings,
+        })
     }
 }
 
@@ -198,7 +201,8 @@ mod tests {
     fn test_parse_multiple_jobs() {
         let dir = make_output_dir();
         let p = dir.path().display();
-        let yaml = format!("jobs:\n  first:\n    output_path: {p}\n  second:\n    output_path: {p}\n");
+        let yaml =
+            format!("jobs:\n  first:\n    output_path: {p}\n  second:\n    output_path: {p}\n");
         let config = Config::parse(&yaml).unwrap();
         assert_eq!(config.jobs.len(), 2);
         assert_eq!(config.jobs[1].job_info["job_id"], 1);
@@ -207,8 +211,7 @@ mod tests {
     #[test]
     fn test_job_color_default() {
         let dir = make_output_dir();
-        let yaml =
-            format!("jobs:\n  x:\n    output_path: {}\n", dir.path().display());
+        let yaml = format!("jobs:\n  x:\n    output_path: {}\n", dir.path().display());
         let config = Config::parse(&yaml).unwrap();
         assert_eq!(config.jobs[0].job_info["color"], "#4D4D4D");
     }
@@ -256,7 +259,10 @@ mod tests {
             dir.path().display()
         );
         let config = Config::parse(&yaml).unwrap();
-        assert_eq!(config.jobs[0].job_info["job_setting"]["continuous_scan"], true);
+        assert_eq!(
+            config.jobs[0].job_info["job_setting"]["continuous_scan"],
+            true
+        );
     }
 
     #[test]
