@@ -1,0 +1,9 @@
+jobs:
+  Scannen:
+    output_path: /home/ingo/nx-boss/scans
+    consume_path: /home/ingo/nx-boss/consume
+    color: '#2196F3'
+    scan_settings:
+      pixelFormats:
+        resolution: 300
+        jpegQuality: 90

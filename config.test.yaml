@@ -1,0 +1,19 @@
+jobs:
+  # Job name appears on the scanner's display
+  Scan to PDF:
+    output_path: ./scans
+    color: '#2196F3'
+    # Optional: override scan settings (all keys map into defaults.yaml)
+    # scan_settings:
+    #   pixelFormats:
+    #     resolution: 600
+    #     jpegQuality: 90
+
+  Scan Archive:
+    output_path: ./scans
+    color: '#4CAF50'
+    scan_settings:
+      pixelFormats:
+        resolution: 300
+        compression: jpeg
+        jpegQuality: 80

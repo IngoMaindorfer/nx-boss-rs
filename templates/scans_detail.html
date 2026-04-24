@@ -6,12 +6,21 @@
 </div>
 
 <div class="card">
-  <table style="max-width:400px">
+  <table style="max-width:500px">
     <tr><th>Batch-ID</th><td style="font-family:monospace;font-size:.85rem">{{ batch_id }}</td></tr>
     <tr><th>Job</th><td>{{ job_name }}</td></tr>
     <tr><th>Erstellt</th><td>{{ created_at }}</td></tr>
     <tr><th>Seiten</th><td>{{ files.len() }}</td></tr>
     <tr><th>Status</th><td>{% if completed %}abgeschlossen{% else %}offen{% endif %}</td></tr>
+    <tr><th>Auflösung</th><td>{{ resolution }} DPI</td></tr>
+    <tr><th>Farbmodus</th><td>{{ pixel_format }}</td></tr>
+    <tr><th>JPEG-Qualität</th><td>{{ jpeg_quality }}</td></tr>
+    {% if let Some(model) = scanner_model %}
+    <tr><th>Scanner-Modell</th><td>{{ model }}</td></tr>
+    {% endif %}
+    {% if let Some(serial) = scanner_serial %}
+    <tr><th>Seriennummer</th><td style="font-family:monospace">{{ serial }}</td></tr>
+    {% endif %}
   </table>
 </div>
 

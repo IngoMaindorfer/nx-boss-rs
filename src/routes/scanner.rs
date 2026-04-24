@@ -34,9 +34,12 @@ pub async fn device(
 ) -> Json<Value> {
     *state.last_scanner_ping.lock().unwrap() = Some(chrono::Local::now());
     *state.scanner_name.lock().unwrap() = Some(payload.scanner_name.clone());
+    *state.scanner_model.lock().unwrap() = Some(payload.scanner_model.clone());
+    *state.scanner_serial.lock().unwrap() = Some(payload.serial_no.clone());
     info!(
         scanner_name = %payload.scanner_name,
         scanner_model = %payload.scanner_model,
+        serial_no = %payload.serial_no,
         scanner_ip = %payload.scanner_ip,
         "scanner registered"
     );

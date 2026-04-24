@@ -8,7 +8,7 @@ use axum::{
 use serde::Deserialize;
 use tracing::warn;
 
-use crate::batch::BatchMetadata;
+use crate::batch::{BatchMetadata, JobConfig};
 use crate::config::Job;
 use crate::state::AppState;
 
@@ -33,6 +33,9 @@ pub struct ScanEntry {
     pub created_at: String,
     pub page_count: usize,
     pub completed: bool,
+    pub resolution: u32,
+    pub pixel_format: String,
+    pub scanner_model: Option<String>,
 }
 
 pub struct JobRow {
@@ -54,6 +57,8 @@ struct DashboardTpl {
     #[allow(dead_code)]
     scanner_online: bool,
     scanner_name: String,
+    scanner_model: Option<String>,
+    scanner_serial: Option<String>,
     recent_scans: Vec<ScanEntry>,
     jobs: Vec<JobRow>,
 }
@@ -63,6 +68,7 @@ struct DashboardTpl {
 struct ScannerStatusTpl {
     online: bool,
     name: String,
+    model: Option<String>,
 }
 
 #[derive(Template)]
@@ -100,6 +106,11 @@ struct ScansDetailTpl {
     created_at: String,
     files: Vec<String>,
     completed: bool,
+    scanner_model: Option<String>,
+    scanner_serial: Option<String>,
+    resolution: u32,
+    pixel_format: String,
+    jpeg_quality: u8,
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +141,9 @@ fn list_scans(jobs: &[Job], limit: usize) -> Vec<ScanEntry> {
                         created_at: meta.created_at,
                         page_count: meta.files.len(),
                         completed: meta.completed,
+                        resolution: meta.job_config.resolution,
+                        pixel_format: meta.job_config.pixel_format,
+                        scanner_model: meta.scanner.model,
                     });
                 }
             }
@@ -175,12 +189,16 @@ fn job_rows(jobs: &[Job]) -> Vec<JobRow> {
 pub async fn dashboard(State(state): State<AppState>) -> Response {
     let online = state.scanner_is_online();
     let name = state.scanner_display_name();
+    let model = state.scanner_display_model();
+    let serial = state.scanner_display_serial();
     let jobs = state.jobs.lock().unwrap();
     let recent_scans = list_scans(&jobs, 10);
     let job_rows = job_rows(&jobs);
     render(DashboardTpl {
         scanner_online: online,
         scanner_name: name,
+        scanner_model: model,
+        scanner_serial: serial,
         recent_scans,
         jobs: job_rows,
     })
@@ -190,6 +208,7 @@ pub async fn scanner_status(State(state): State<AppState>) -> Response {
     render(ScannerStatusTpl {
         online: state.scanner_is_online(),
         name: state.scanner_display_name(),
+        model: state.scanner_display_model(),
     })
 }
 
@@ -372,12 +391,18 @@ pub async fn scans_detail(Path(batch_id): Path<String>, State(state): State<AppS
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     let files: Vec<String> = meta.files.iter().map(|f| f.filename.clone()).collect();
+    let JobConfig { resolution, pixel_format, jpeg_quality } = meta.job_config;
     render(ScansDetailTpl {
         batch_id,
         job_name: meta.job_name,
         created_at: meta.created_at,
         files,
         completed: meta.completed,
+        scanner_model: meta.scanner.model,
+        scanner_serial: meta.scanner.serial,
+        resolution,
+        pixel_format,
+        jpeg_quality,
     })
 }
 

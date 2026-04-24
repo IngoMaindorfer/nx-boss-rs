@@ -12,12 +12,37 @@ pub fn now_iso() -> String {
     Local::now().to_rfc3339()
 }
 
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct ScannerInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub serial: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct JobConfig {
+    pub resolution: u32,
+    pub pixel_format: String,
+    pub jpeg_quality: u8,
+}
+
+impl Default for JobConfig {
+    fn default() -> Self {
+        Self { resolution: 300, pixel_format: "rgb24".to_string(), jpeg_quality: 80 }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BatchMetadata {
     pub job_name: String,
     pub created_at: String,
     pub completed: bool,
     pub files: Vec<FileEntry>,
+    #[serde(default)]
+    pub scanner: ScannerInfo,
+    #[serde(default)]
+    pub job_config: JobConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -36,8 +61,8 @@ pub struct Batch {
 }
 
 impl Batch {
-    pub fn create(job: &Job) -> Result<Self> {
-        let id = Uuid::new_v4().simple().to_string();
+    pub fn create(job: &Job, scanner: ScannerInfo) -> Result<Self> {
+        let id = Uuid::now_v6(b"nxboss").simple().to_string();
         let dir = job.output_path.join(&id);
         std::fs::create_dir_all(&dir)?;
         let metadata = BatchMetadata {
@@ -48,6 +73,12 @@ impl Batch {
             created_at: now_iso(),
             completed: false,
             files: vec![],
+            scanner,
+            job_config: JobConfig {
+                resolution: job.resolution(),
+                pixel_format: job.pixel_format().to_string(),
+                jpeg_quality: job.jpeg_quality(),
+            },
         };
         let consume_path = job.consume_path.clone();
         let mut batch = Self {
@@ -176,7 +207,7 @@ mod tests {
     fn test_create_batch_makes_dir() {
         let tmp = tempfile::TempDir::new().unwrap();
         let job = make_job(tmp.path());
-        let batch = Batch::create(&job).unwrap();
+        let batch = Batch::create(&job, ScannerInfo::default()).unwrap();
         assert!(tmp.path().join(&batch.id).is_dir());
     }
 
@@ -184,7 +215,7 @@ mod tests {
     fn test_create_writes_metadata() {
         let tmp = tempfile::TempDir::new().unwrap();
         let job = make_job(tmp.path());
-        let batch = Batch::create(&job).unwrap();
+        let batch = Batch::create(&job, ScannerInfo::default()).unwrap();
         let meta_path = tmp.path().join(&batch.id).join("metadata.json");
         assert!(meta_path.exists());
         let meta: serde_json::Value =
@@ -197,7 +228,7 @@ mod tests {
     fn test_add_file_writes_bytes() {
         let tmp = tempfile::TempDir::new().unwrap();
         let job = make_job(tmp.path());
-        let mut batch = Batch::create(&job).unwrap();
+        let mut batch = Batch::create(&job, ScannerInfo::default()).unwrap();
         batch.add_file("scan.jpg", b"fakeimage", json!({})).unwrap();
         let file = tmp.path().join(&batch.id).join("scan.jpg");
         assert_eq!(fs::read(file).unwrap(), b"fakeimage");
@@ -207,7 +238,7 @@ mod tests {
     fn test_add_file_records_in_metadata() {
         let tmp = tempfile::TempDir::new().unwrap();
         let job = make_job(tmp.path());
-        let mut batch = Batch::create(&job).unwrap();
+        let mut batch = Batch::create(&job, ScannerInfo::default()).unwrap();
         batch
             .add_file("page1.jpg", b"data", json!({"key": "val"}))
             .unwrap();
@@ -219,7 +250,7 @@ mod tests {
     fn test_add_file_rejects_path_traversal() {
         let tmp = tempfile::TempDir::new().unwrap();
         let job = make_job(tmp.path());
-        let mut batch = Batch::create(&job).unwrap();
+        let mut batch = Batch::create(&job, ScannerInfo::default()).unwrap();
         let result = batch.add_file("../escape.txt", b"evil", json!({}));
         assert!(result.is_err());
         assert!(!tmp.path().join("escape.txt").exists());
@@ -229,7 +260,7 @@ mod tests {
     fn test_complete_sets_flag() {
         let tmp = tempfile::TempDir::new().unwrap();
         let job = make_job(tmp.path());
-        let mut batch = Batch::create(&job).unwrap();
+        let mut batch = Batch::create(&job, ScannerInfo::default()).unwrap();
         assert!(!batch.metadata().completed);
         batch.complete().unwrap();
         assert!(batch.metadata().completed);
@@ -239,7 +270,7 @@ mod tests {
     fn test_complete_persists_to_disk() {
         let tmp = tempfile::TempDir::new().unwrap();
         let job = make_job(tmp.path());
-        let mut batch = Batch::create(&job).unwrap();
+        let mut batch = Batch::create(&job, ScannerInfo::default()).unwrap();
         batch.complete().unwrap();
         let meta: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(tmp.path().join(&batch.id).join("metadata.json")).unwrap(),
@@ -252,7 +283,7 @@ mod tests {
     fn test_no_orphan_tmp_metadata() {
         let tmp = tempfile::TempDir::new().unwrap();
         let job = make_job(tmp.path());
-        let mut batch = Batch::create(&job).unwrap();
+        let mut batch = Batch::create(&job, ScannerInfo::default()).unwrap();
         batch.add_file("x.jpg", b"x", json!({})).unwrap();
         assert!(!tmp.path().join(&batch.id).join(".metadata.json").exists());
     }

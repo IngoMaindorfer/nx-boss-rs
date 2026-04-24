@@ -7,7 +7,7 @@ use axum::{
 use serde_json::{Value, json};
 use tracing::{debug, info, warn};
 
-use crate::batch::Batch;
+use crate::batch::{Batch, ScannerInfo};
 use crate::state::AppState;
 
 pub async fn post_batch(
@@ -52,7 +52,11 @@ pub async fn post_batch(
 
     let job = jobs[job_id].clone();
     drop(jobs);
-    match Batch::create(&job) {
+    let scanner = ScannerInfo {
+        model: state.scanner_model.lock().unwrap().clone(),
+        serial: state.scanner_serial.lock().unwrap().clone(),
+    };
+    match Batch::create(&job, scanner) {
         Ok(batch) => {
             let id = batch.id.clone();
             let job_name = job.job_info["name"].as_str().unwrap_or("?").to_string();

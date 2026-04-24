@@ -13,6 +13,8 @@ pub struct AppState {
     pub batches: Arc<Mutex<HashMap<String, Batch>>>,
     pub last_scanner_ping: Arc<Mutex<Option<DateTime<Local>>>>,
     pub scanner_name: Arc<Mutex<Option<String>>>,
+    pub scanner_model: Arc<Mutex<Option<String>>>,
+    pub scanner_serial: Arc<Mutex<Option<String>>>,
     pub config_path: Option<PathBuf>,
 }
 
@@ -23,6 +25,8 @@ impl AppState {
             batches: Arc::new(Mutex::new(HashMap::new())),
             last_scanner_ping: Arc::new(Mutex::new(None)),
             scanner_name: Arc::new(Mutex::new(None)),
+            scanner_model: Arc::new(Mutex::new(None)),
+            scanner_serial: Arc::new(Mutex::new(None)),
             config_path: None,
         }
     }
@@ -46,5 +50,13 @@ impl AppState {
             .unwrap()
             .clone()
             .unwrap_or_else(|| "—".to_string())
+    }
+
+    pub fn scanner_display_model(&self) -> Option<String> {
+        self.scanner_model.lock().unwrap().clone()
+    }
+
+    pub fn scanner_display_serial(&self) -> Option<String> {
+        self.scanner_serial.lock().unwrap().clone()
     }
 }
