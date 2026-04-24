@@ -24,6 +24,7 @@ pub mod ui;
 // Also normalize any multipart/* subtype to multipart/form-data so axum's
 // Multipart extractor accepts it (scanners may send multipart/mixed).
 async fn force_json(mut req: Request, next: Next) -> Response {
+    let is_scanner = req.uri().path().starts_with("/NmWebService/");
     let ct = req
         .headers()
         .get(header::CONTENT_TYPE)
@@ -32,7 +33,8 @@ async fn force_json(mut req: Request, next: Next) -> Response {
 
     match ct.as_deref() {
         Some(s) if s.starts_with("multipart/form-data") => {}
-        Some(s) if s.starts_with("application/x-www-form-urlencoded") => {}
+        // Pass form submissions through only for UI routes; scanner routes must get JSON.
+        Some(s) if !is_scanner && s.starts_with("application/x-www-form-urlencoded") => {}
         Some(s) if s.starts_with("multipart/") => {
             // Preserve the boundary parameter while normalising the subtype.
             let boundary_param = s
