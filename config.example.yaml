@@ -1,25 +1,19 @@
 jobs:
-  default:
-    output_path: ./out/
+  # Job name appears on the scanner's display
+  Scan to PDF:
+    output_path: ./scans
+    color: '#2196F3'
+    # Optional: override scan settings (all keys map into defaults.yaml)
+    # scan_settings:
+    #   pixelFormats:
+    #     resolution: 600
+    #     jpegQuality: 90
 
-  multi:
-    output_path: ./out/
-    job_settings:
-      continuous_scan: true
-
-  quality:
-    output_path: ./out/
-    color: '#ff0000'
+  Scan Archive:
+    output_path: ./scans
+    color: '#4CAF50'
     scan_settings:
       pixelFormats:
-        resolution: 600
-        jpegQuality: 90
-
-  long_receipt:
-    output_path: ./out/
-    scan_settings:
-      pixelFormats:
-        height: 42304
-        width: 5120
-        paperLength: 42304
-        paperWidth: 5120
+        resolution: 300
+        compression: jpeg
+        jpegQuality: 80

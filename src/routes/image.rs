@@ -5,6 +5,7 @@ use axum::{
     response::IntoResponse,
 };
 use serde_json::json;
+use tracing::{info, warn};
 
 use crate::state::AppState;
 
@@ -23,6 +24,7 @@ pub async fn post_image(
                 match field.bytes().await {
                     Ok(b) => image_bytes = Some(b.to_vec()),
                     Err(e) => {
+                        warn!(error = %e, "failed to read image field");
                         return (
                             StatusCode::BAD_REQUEST,
                             Json(json!({ "error": e.to_string() })),
@@ -34,6 +36,7 @@ pub async fn post_image(
             Some("parameter") => match field.bytes().await {
                 Ok(b) => parameter_bytes = Some(b.to_vec()),
                 Err(e) => {
+                    warn!(error = %e, "failed to read parameter field");
                     return (
                         StatusCode::BAD_REQUEST,
                         Json(json!({ "error": e.to_string() })),
@@ -52,6 +55,7 @@ pub async fn post_image(
     let content = match image_bytes {
         Some(b) => b,
         None => {
+            warn!("post_image: missing image field");
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": "missing image field" })),
@@ -63,6 +67,7 @@ pub async fn post_image(
         Some(b) => match serde_json::from_slice(&b) {
             Ok(v) => v,
             Err(e) => {
+                warn!(error = %e, "post_image: invalid parameter JSON");
                 return (
                     StatusCode::BAD_REQUEST,
                     Json(json!({ "error": format!("invalid parameter JSON: {e}") })),
@@ -71,6 +76,7 @@ pub async fn post_image(
             }
         },
         None => {
+            warn!("post_image: missing parameter field");
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": "missing parameter field" })),
@@ -82,6 +88,7 @@ pub async fn post_image(
     let batch_id = match parameters["batch_id"].as_str() {
         Some(id) => id.to_string(),
         None => {
+            warn!("post_image: missing batch_id in parameter JSON");
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": "missing batch_id in parameter" })),
@@ -93,20 +100,37 @@ pub async fn post_image(
     let mut batches = state.batches.lock().unwrap();
     let batch = match batches.get_mut(&batch_id) {
         Some(b) => b,
-        None => return StatusCode::NOT_FOUND.into_response(),
+        None => {
+            warn!(batch_id = %batch_id, "post_image: unknown batch_id");
+            return StatusCode::NOT_FOUND.into_response();
+        }
     };
 
     match batch.add_file(&filename, &content, parameters) {
-        Ok(()) => StatusCode::OK.into_response(),
-        Err(e) if e.to_string().contains("bad filename") => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "bad filename" })),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        )
-            .into_response(),
+        Ok(()) => {
+            info!(
+                batch_id = %batch_id,
+                filename = %filename,
+                bytes = content.len(),
+                "image saved"
+            );
+            StatusCode::OK.into_response()
+        }
+        Err(e) if e.to_string().contains("bad filename") => {
+            warn!(batch_id = %batch_id, filename = %filename, "post_image: path traversal rejected");
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "bad filename" })),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            warn!(batch_id = %batch_id, error = %e, "post_image: failed to save image");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
     }
 }
