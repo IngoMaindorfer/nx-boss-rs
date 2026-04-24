@@ -1,36 +1,25 @@
-FROM python:3.14-slim AS builder
+FROM rust:slim AS builder
 
 WORKDIR /app
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-ENV UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy \
-    UV_PYTHON_DOWNLOADS=never
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    musl-tools \
+    && rm -rf /var/lib/apt/lists/* \
+    && rustup target add x86_64-unknown-linux-musl
 
-RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
-
-COPY pyproject.toml uv.lock README.md ./
+COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
-COPY .git/ .git/
+COPY defaults.yaml ./
 
-RUN uv sync --no-dev --no-editable
+RUN cargo build --release --target x86_64-unknown-linux-musl
 
 
-FROM python:3.14-slim
+FROM scratch
 
-WORKDIR /app
-
-COPY --from=builder /app/.venv /app/.venv
-
-ENV PATH="/app/.venv/bin:$PATH"
-
-RUN adduser --disabled-password --gecos "" appuser \
-    && mkdir -p /data \
-    && chown appuser:appuser /data
-USER appuser
+COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/nx-boss /nx-boss
 
 VOLUME ["/data", "/config"]
 EXPOSE 10447
 
-ENTRYPOINT ["python", "-m", "nx_boss"]
+ENTRYPOINT ["/nx-boss"]
 CMD ["--config", "/config/config.yaml", "--host", "0.0.0.0", "--port", "10447"]

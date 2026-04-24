@@ -12,24 +12,30 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          fetch-depth: 0
+          components: clippy, rustfmt
 
-      - uses: astral-sh/setup-uv@v5
+      - name: Cache cargo registry
+        uses: actions/cache@v4
         with:
-          enable-cache: true
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Install dependencies
-        run: uv sync --extra dev --frozen
+      - name: rustfmt check
+        run: cargo fmt -- --check
 
-      - name: Ruff lint
-        run: uv run ruff check src/ tests/
+      - name: clippy
+        run: cargo clippy -- -D warnings
 
-      - name: mypy
-        run: uv run mypy src/
-
-      - name: pytest
-        run: uv run pytest tests/ -v
+      - name: cargo test
+        run: cargo test
 
   docker:
     name: Build & Push Docker image
@@ -41,8 +47,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - uses: docker/setup-buildx-action@v3
 
