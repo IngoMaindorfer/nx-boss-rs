@@ -10,7 +10,10 @@ ENV UV_COMPILE_BYTECODE=1 \
 COPY pyproject.toml uv.lock ./
 COPY src/ src/
 
-RUN uv sync --no-dev --no-editable
+# hatch-vcs needs a git tag to determine the version.
+# Without .git in the build context, pass it as a build arg instead.
+ARG VERSION=0.0.0.dev0
+RUN SETUPTOOLS_SCM_PRETEND_VERSION_FOR_NX_BOSS=${VERSION} uv sync --no-dev --no-editable
 
 
 FROM python:3.14-slim
