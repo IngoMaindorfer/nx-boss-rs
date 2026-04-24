@@ -42,7 +42,17 @@ fn parse_jpeg(data: &[u8]) -> Option<JpegInfo> {
         // SOF markers — contain width, height, components
         if matches!(
             marker,
-            0xC0 | 0xC1 | 0xC2 | 0xC3 | 0xC5 | 0xC6 | 0xC7 | 0xC9 | 0xCA | 0xCB | 0xCD | 0xCE
+            0xC0 | 0xC1
+                | 0xC2
+                | 0xC3
+                | 0xC5
+                | 0xC6
+                | 0xC7
+                | 0xC9
+                | 0xCA
+                | 0xCB
+                | 0xCD
+                | 0xCE
                 | 0xCF
         ) && pos + 9 < data.len()
         {
@@ -64,8 +74,17 @@ fn parse_jpeg(data: &[u8]) -> Option<JpegInfo> {
     }
 
     let (width, height, comps) = dims?;
-    let color_space = if comps == 1 { "DeviceGray" } else { "DeviceRGB" };
-    Some(JpegInfo { width, height, color_space, dpi })
+    let color_space = if comps == 1 {
+        "DeviceGray"
+    } else {
+        "DeviceRGB"
+    };
+    Some(JpegInfo {
+        width,
+        height,
+        color_space,
+        dpi,
+    })
 }
 
 /// Assemble JPEG pages into a single PDF, embedding them without re-encoding.
@@ -92,7 +111,10 @@ pub fn assemble_pdf(jpeg_pages: &[Vec<u8>]) -> Result<Vec<u8>> {
         img_dict.set("Subtype", Object::Name(b"Image".to_vec()));
         img_dict.set("Width", Object::Integer(info.width as i64));
         img_dict.set("Height", Object::Integer(info.height as i64));
-        img_dict.set("ColorSpace", Object::Name(info.color_space.as_bytes().to_vec()));
+        img_dict.set(
+            "ColorSpace",
+            Object::Name(info.color_space.as_bytes().to_vec()),
+        );
         img_dict.set("BitsPerComponent", Object::Integer(8));
         img_dict.set("Filter", Object::Name(b"DCTDecode".to_vec()));
         let img_id = doc.add_object(Stream::new(img_dict, jpeg.clone()));
@@ -178,8 +200,7 @@ mod tests {
         let mut v = vec![
             0xFF, 0xD8, // SOI
             // APP0 (JFIF), length=16
-            0xFF, 0xE0, 0x00, 0x10,
-            0x4A, 0x46, 0x49, 0x46, 0x00, // "JFIF\0"
+            0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, // "JFIF\0"
             0x01, 0x01, // version 1.1
             0x01, // units = DPI
         ];

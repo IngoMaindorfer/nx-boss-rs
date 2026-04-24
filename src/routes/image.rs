@@ -138,7 +138,7 @@ pub async fn post_image(
 #[cfg(test)]
 mod tests {
     use axum_test::TestServer;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     use crate::config::{Config, Job};
     use crate::routes::router;
@@ -179,9 +179,7 @@ mod tests {
         body.extend_from_slice(b"\r\n");
 
         body.extend_from_slice(sep.as_bytes());
-        body.extend_from_slice(
-            b"Content-Disposition: form-data; name=\"parameter\"\r\n\r\n",
-        );
+        body.extend_from_slice(b"Content-Disposition: form-data; name=\"parameter\"\r\n\r\n");
         body.extend_from_slice(param_json.as_bytes());
         body.extend_from_slice(b"\r\n");
 

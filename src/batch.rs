@@ -50,7 +50,12 @@ impl Batch {
             files: vec![],
         };
         let consume_path = job.consume_path.clone();
-        let mut batch = Self { id, dir, consume_path, metadata };
+        let mut batch = Self {
+            id,
+            dir,
+            consume_path,
+            metadata,
+        };
         batch.flush_metadata()?;
         Ok(batch)
     }
@@ -99,7 +104,13 @@ impl Batch {
             .metadata
             .job_name
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
         let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
         let filename = format!("{safe_name}_{ts}.pdf");

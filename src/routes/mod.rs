@@ -40,10 +40,8 @@ async fn force_json(mut req: Request, next: Next) -> Response {
             }
         }
         _ => {
-            req.headers_mut().insert(
-                header::CONTENT_TYPE,
-                "application/json".parse().unwrap(),
-            );
+            req.headers_mut()
+                .insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
         }
     }
     next.run(req).await
