@@ -7,6 +7,7 @@ use tracing_subscriber::EnvFilter;
 
 mod batch;
 mod config;
+mod pdf;
 mod routes;
 mod state;
 

@@ -4,28 +4,57 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use serde::Deserialize;
-use serde_json::json;
-use tracing::{info, warn};
+use serde_json::{Value, json};
+use tracing::{debug, info, warn};
 
 use crate::batch::Batch;
 use crate::state::AppState;
 
-#[derive(Deserialize)]
-pub struct PostBatchRequest {
-    pub job_id: usize,
-}
-
 pub async fn post_batch(
     State(state): State<AppState>,
-    Json(req): Json<PostBatchRequest>,
+    Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    let job = &state.config.jobs[req.job_id];
+    debug!(body = %body, "POST /batch body");
+
+    // Scanner may send job_id as integer or string
+    let job_id = match body.get("job_id") {
+        Some(Value::Number(n)) => n.as_u64().unwrap_or(0) as usize,
+        Some(Value::String(s)) => match s.parse::<usize>() {
+            Ok(n) => n,
+            Err(_) => {
+                warn!(body = %body, "post_batch: invalid job_id string");
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({ "error": "invalid job_id" })),
+                )
+                    .into_response();
+            }
+        },
+        other => {
+            warn!(body = %body, got = ?other, "post_batch: missing or wrong type for job_id");
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({ "error": "missing job_id" })),
+            )
+                .into_response();
+        }
+    };
+
+    if job_id >= state.config.jobs.len() {
+        warn!(job_id, "post_batch: job_id out of range");
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "error": "job_id out of range" })),
+        )
+            .into_response();
+    }
+
+    let job = &state.config.jobs[job_id];
     match Batch::create(job) {
         Ok(batch) => {
             let id = batch.id.clone();
             let job_name = job.job_info["name"].as_str().unwrap_or("?");
-            info!(batch_id = %id, job_id = req.job_id, job_name, "batch created");
+            info!(batch_id = %id, job_id, job_name, "batch created");
             state.batches.lock().unwrap().insert(id.clone(), batch);
             (StatusCode::OK, Json(json!({ "batch_id": id }))).into_response()
         }

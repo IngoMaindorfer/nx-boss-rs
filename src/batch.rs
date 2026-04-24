@@ -31,6 +31,7 @@ pub struct FileEntry {
 pub struct Batch {
     pub id: String,
     dir: PathBuf,
+    consume_path: Option<PathBuf>,
     metadata: BatchMetadata,
 }
 
@@ -48,7 +49,8 @@ impl Batch {
             completed: false,
             files: vec![],
         };
-        let mut batch = Self { id, dir, metadata };
+        let consume_path = job.consume_path.clone();
+        let mut batch = Self { id, dir, consume_path, metadata };
         batch.flush_metadata()?;
         Ok(batch)
     }
@@ -76,7 +78,39 @@ impl Batch {
 
     pub fn complete(&mut self) -> Result<()> {
         self.metadata.completed = true;
-        self.flush_metadata()
+        self.flush_metadata()?;
+        if let Some(ref consume_path) = self.consume_path.clone() {
+            self.deliver_pdf(consume_path)?;
+        }
+        Ok(())
+    }
+
+    fn deliver_pdf(&self, consume_path: &Path) -> Result<()> {
+        let pages: Vec<Vec<u8>> = self
+            .metadata
+            .files
+            .iter()
+            .map(|f| std::fs::read(self.dir.join(&f.filename)))
+            .collect::<Result<_, _>>()?;
+
+        let pdf = crate::pdf::assemble_pdf(&pages)?;
+
+        let safe_name: String = self
+            .metadata
+            .job_name
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
+            .collect();
+        let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let filename = format!("{safe_name}_{ts}.pdf");
+        let dest = consume_path.join(&filename);
+        std::fs::write(&dest, pdf)?;
+        tracing::info!(
+            filename = %filename,
+            pages = self.metadata.files.len(),
+            "PDF delivered to consume folder"
+        );
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -121,6 +155,7 @@ mod tests {
     fn make_job(dir: &Path) -> Job {
         Job {
             output_path: dir.to_path_buf(),
+            consume_path: None,
             job_info: json!({"name": "test", "job_id": 0, "color": "#4D4D4D", "type": 0, "job_setting": {}, "hierarchy_list": null}),
             scan_settings: json!({}),
         }

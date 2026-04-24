@@ -15,6 +15,7 @@ pub struct RawConfig {
 #[derive(Debug, Deserialize, Default)]
 pub struct RawJob {
     pub output_path: String,
+    pub consume_path: Option<String>,
     pub color: Option<String>,
     pub job_settings: Option<HashMap<String, Value>>,
     pub scan_settings: Option<HashMap<String, Value>>,
@@ -23,6 +24,7 @@ pub struct RawJob {
 #[derive(Debug, Clone)]
 pub struct Job {
     pub output_path: PathBuf,
+    pub consume_path: Option<PathBuf>,
     pub job_info: Value,
     pub scan_settings: Value,
 }
@@ -58,6 +60,17 @@ impl Job {
             bail!("output_path {:?} is not a directory", output_path);
         }
 
+        let consume_path = raw
+            .consume_path
+            .map(|p| {
+                let path = PathBuf::from(&p);
+                if !path.is_dir() {
+                    bail!("consume_path {:?} is not a directory", path);
+                }
+                Ok(path)
+            })
+            .transpose()?;
+
         let job_settings = build_job_settings(raw.job_settings.as_ref());
         let scan_settings = build_scan_settings(raw.scan_settings.as_ref())?;
 
@@ -72,6 +85,7 @@ impl Job {
 
         Ok(Self {
             output_path,
+            consume_path,
             job_info,
             scan_settings,
         })
