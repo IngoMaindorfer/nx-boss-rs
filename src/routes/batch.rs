@@ -98,3 +98,128 @@ pub async fn put_batch(
     info!(batch_id = %batch_id, n_files, "batch completed");
     StatusCode::OK.into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use axum_test::TestServer;
+    use serde_json::{Value, json};
+
+    use crate::config::{Config, Job};
+    use crate::routes::router;
+    use crate::state::AppState;
+
+    fn test_server() -> (TestServer, tempfile::TempDir) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = Config {
+            jobs: vec![Job {
+                output_path: tmp.path().to_path_buf(),
+                consume_path: None,
+                job_info: json!({
+                    "name": "TestJob", "job_id": 0, "color": "#4D4D4D",
+                    "type": 0, "job_setting": {}, "hierarchy_list": null
+                }),
+                scan_settings: json!({}),
+            }],
+        };
+        (TestServer::new(router(AppState::new(config))), tmp)
+    }
+
+    fn empty_server() -> TestServer {
+        let config = Config { jobs: vec![] };
+        TestServer::new(router(AppState::new(config)))
+    }
+
+    async fn create_batch(server: &TestServer) -> String {
+        server
+            .post("/NmWebService/batch")
+            .json(&json!({"job_id": 0}))
+            .await
+            .json::<Value>()["batch_id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn test_post_batch_valid_job_id() {
+        let (server, _tmp) = test_server();
+        let resp = server
+            .post("/NmWebService/batch")
+            .json(&json!({"job_id": 0}))
+            .await;
+        assert_eq!(resp.status_code(), 200);
+        assert!(resp.json::<Value>()["batch_id"].is_string());
+    }
+
+    #[tokio::test]
+    async fn test_post_batch_string_job_id() {
+        let (server, _tmp) = test_server();
+        let resp = server
+            .post("/NmWebService/batch")
+            .json(&json!({"job_id": "0"}))
+            .await;
+        assert_eq!(resp.status_code(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_post_batch_out_of_range_job_id() {
+        let (server, _tmp) = test_server();
+        let resp = server
+            .post("/NmWebService/batch")
+            .json(&json!({"job_id": 999}))
+            .await;
+        assert_eq!(resp.status_code(), 422);
+    }
+
+    #[tokio::test]
+    async fn test_post_batch_missing_job_id() {
+        let (server, _tmp) = test_server();
+        let resp = server.post("/NmWebService/batch").json(&json!({})).await;
+        assert_eq!(resp.status_code(), 422);
+    }
+
+    #[tokio::test]
+    async fn test_post_batch_invalid_string_job_id() {
+        let (server, _tmp) = test_server();
+        let resp = server
+            .post("/NmWebService/batch")
+            .json(&json!({"job_id": "notanumber"}))
+            .await;
+        assert_eq!(resp.status_code(), 422);
+    }
+
+    #[tokio::test]
+    async fn test_post_batch_no_jobs_configured() {
+        let server = empty_server();
+        let resp = server
+            .post("/NmWebService/batch")
+            .json(&json!({"job_id": 0}))
+            .await;
+        assert_eq!(resp.status_code(), 422);
+    }
+
+    #[tokio::test]
+    async fn test_put_batch_completes_successfully() {
+        let (server, _tmp) = test_server();
+        let batch_id = create_batch(&server).await;
+        let resp = server.put(&format!("/NmWebService/batch/{batch_id}")).await;
+        assert_eq!(resp.status_code(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_put_batch_unknown_id_returns_404() {
+        let (server, _tmp) = test_server();
+        let resp = server.put("/NmWebService/batch/deadbeefdeadbeef").await;
+        assert_eq!(resp.status_code(), 404);
+    }
+
+    #[tokio::test]
+    async fn test_put_batch_removes_from_active_batches() {
+        let (server, _tmp) = test_server();
+        let batch_id = create_batch(&server).await;
+        server.put(&format!("/NmWebService/batch/{batch_id}")).await;
+        // Second PUT on same batch_id must return 404 — batch was removed
+        let resp = server.put(&format!("/NmWebService/batch/{batch_id}")).await;
+        assert_eq!(resp.status_code(), 404);
+    }
+}

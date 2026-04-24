@@ -97,3 +97,73 @@ pub fn router(state: AppState) -> Router {
         .layer(trace_layer)
         .with_state(state)
 }
+
+#[cfg(test)]
+mod tests {
+    use axum_test::TestServer;
+    use serde_json::json;
+
+    use crate::config::{Config, Job};
+    use crate::state::AppState;
+
+    fn test_server() -> (TestServer, tempfile::TempDir) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = Config {
+            jobs: vec![Job {
+                output_path: tmp.path().to_path_buf(),
+                consume_path: None,
+                job_info: json!({
+                    "name": "TestJob", "job_id": 0, "color": "#4D4D4D",
+                    "type": 0, "job_setting": {}, "hierarchy_list": null
+                }),
+                scan_settings: json!({}),
+            }],
+        };
+        (TestServer::new(super::router(AppState::new(config))), tmp)
+    }
+
+    #[tokio::test]
+    async fn test_scanner_request_no_content_type_accepted_as_json() {
+        // Scanners often send no Content-Type; middleware must inject application/json
+        let (server, _tmp) = test_server();
+        let resp = server
+            .post("/NmWebService/batch")
+            .bytes(br#"{"job_id":0}"#.as_ref().into())
+            .await;
+        assert_eq!(resp.status_code(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_scanner_request_uppercase_content_type_accepted() {
+        // RFC 2616: header field names are case-insensitive; middleware lowercases before matching
+        let (server, _tmp) = test_server();
+        let resp = server
+            .post("/NmWebService/batch")
+            .content_type("Application/Json")
+            .bytes(br#"{"job_id":0}"#.as_ref().into())
+            .await;
+        assert_eq!(resp.status_code(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_form_post_to_ui_route_not_coerced_to_json() {
+        // UI form submissions must keep application/x-www-form-urlencoded so axum Form works
+        let (server, _tmp) = test_server();
+        let out = _tmp.path().join("sub");
+        std::fs::create_dir_all(&out).unwrap();
+        let resp = server
+            .post("/jobs")
+            .form(&[
+                ("name", "FormJob"),
+                ("output_path", out.to_str().unwrap()),
+                ("color", "#000000"),
+                ("resolution", "300"),
+                ("jpeg_quality", "80"),
+                ("pixel_format", "rgb24"),
+                ("consume_path", ""),
+            ])
+            .await;
+        // Redirect means form was parsed correctly
+        assert_eq!(resp.status_code(), 303);
+    }
+}
