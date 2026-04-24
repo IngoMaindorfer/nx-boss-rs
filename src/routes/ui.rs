@@ -457,22 +457,38 @@ pub async fn scans_file(
 // ---------------------------------------------------------------------------
 
 fn job_form_to_yaml(form: &JobFormData) -> String {
-    let consume_line = if form.consume_path.trim().is_empty() {
-        String::new()
-    } else {
-        format!("    consume_path: {}\n", form.consume_path.trim())
+    use crate::config::{RawConfig, RawJob};
+    use indexmap::IndexMap;
+    use std::collections::HashMap;
+
+    let mut scan_settings = HashMap::new();
+    scan_settings.insert("source".to_string(), serde_json::json!(form.source.trim()));
+    let mut pf = HashMap::new();
+    pf.insert("resolution".to_string(), serde_json::json!(form.resolution));
+    pf.insert(
+        "jpegQuality".to_string(),
+        serde_json::json!(form.jpeg_quality),
+    );
+    pf.insert(
+        "pixelFormat".to_string(),
+        serde_json::json!(form.pixel_format),
+    );
+    scan_settings.insert("pixelFormats".to_string(), serde_json::json!(pf));
+
+    let raw_job = RawJob {
+        output_path: form.output_path.trim().to_string(),
+        consume_path: if form.consume_path.trim().is_empty() {
+            None
+        } else {
+            Some(form.consume_path.trim().to_string())
+        },
+        color: Some(form.color.clone()),
+        job_settings: None,
+        scan_settings: Some(scan_settings),
     };
-    format!(
-        "jobs:\n  {}:\n    output_path: {}\n{}    color: '{}'\n    scan_settings:\n      source: {}\n      pixelFormats:\n        resolution: {}\n        jpegQuality: {}\n        pixelFormat: {}\n",
-        form.name.trim(),
-        form.output_path.trim(),
-        consume_line,
-        form.color,
-        form.source.trim(),
-        form.resolution,
-        form.jpeg_quality,
-        form.pixel_format,
-    )
+    let mut jobs = IndexMap::new();
+    jobs.insert(form.name.trim().to_string(), raw_job);
+    serde_yaml::to_string(&RawConfig { jobs }).unwrap_or_default()
 }
 
 fn form_to_tpl(
