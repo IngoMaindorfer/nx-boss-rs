@@ -1,0 +1,18 @@
+services:
+  nx-boss:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:10447:10447"
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - scans:/data
+    networks:
+      - internal
+
+volumes:
+  scans:
+
+networks:
+  internal:
+    internal: true
