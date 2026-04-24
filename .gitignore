@@ -1,6 +1,10 @@
 # Rust
 /target
 
+# Scan output and consume delivery — never commit user data
+scans/
+consume/
+
 # Python (legacy, kept for main branch)
 __pycache__/
 *.py[oc]
