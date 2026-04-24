@@ -1203,7 +1203,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nx-boss"
+name = "nx-boss-rs"
 version = "0.1.0"
 dependencies = [
  "anyhow",

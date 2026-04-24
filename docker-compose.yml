@@ -1,5 +1,5 @@
 services:
-  nx-boss:
+  nx-boss-rs:
     build: .
     restart: unless-stopped
     ports:

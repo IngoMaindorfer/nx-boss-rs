@@ -1,11 +1,11 @@
 [package]
-name = "nx-boss"
+name = "nx-boss-rs"
 version = "0.1.0"
 edition = "2024"
 description = "Compatible server for PaperStream NX Manager"
 
 [[bin]]
-name = "nx-boss"
+name = "nx-boss-rs"
 path = "src/main.rs"
 
 [dependencies]
