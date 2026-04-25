@@ -268,35 +268,27 @@ python scripts/rev.py http://192.168.1.x:20447 compare 0
 
 ---
 
-## Open topics
+## UI language
 
-### UI language / i18n
-
-The UI and validation error messages are currently in German.
-The most practical path to multi-language support without pulling in a heavy i18n framework:
-
-- Add a `lang: de` key to `config.yaml` (default `de`, also `en`)
-- Store translation strings in static Rust `phf::Map` tables or a simple `match lang` in a `translations.rs` module
-- Pass a `&'static Translations` reference into each Askama template
-- The hardcoded strings are concentrated in [`src/routes/jobs.rs`](src/routes/jobs.rs) (`apply_job_form`) and the template files
-
-No runtime locale detection is needed — a single configured language per installation is sufficient for the target use case.
-
-### Scanner authentication
-
-Currently `auth_type: "none"` means any fi-series scanner reachable on the network can log in and scan to any job.
-For most home/office setups this is fine (the server is only reachable on the internal LAN).
-If stricter control is needed, two approaches fit the existing protocol:
-
-**Option A — MAC allowlist** (simplest, one afternoon):
-
-Add an `allowed_macs` list to `config.yaml`. The `POST /device` handler rejects unknown MACs with 403. No scanner UI changes required.
+nx-boss-rs ships with German (`de`) and English (`en`) translations.
+Set the language in `config.yaml`:
 
 ```yaml
-allowed_macs:
-  - "00:80:17:e7:6f:33"
+lang: en   # or de (default)
 ```
 
-**Option B — password auth** (protocol-native, better UX):
+The server reads this once at startup. All UI strings, form labels, and validation error messages switch accordingly. No UI toggle exists — it is a per-installation setting, not a per-user preference.
 
-The NmWebService protocol supports `auth_type: "password"`. Return it from `GET /authorization` and the scanner prompts the operator for a PIN on its own keypad before showing the job list. Validate the credential in `POST /authorization`. This is the cleanest approach — no rogue scanning and the scanner's own display handles the prompt.
+Adding a new language means adding one `pub static XX: Translations = Translations { ... }` block to [`src/translations.rs`](src/translations.rs) and one `"xx" => &XX` arm in `for_lang()`. The struct has 63 fields, all checked at compile time by Rust.
+
+## Scanner authentication
+
+`auth_type: "none"` is intentional. nx-boss-rs is designed for home and small-office use on a **trusted internal LAN** — it must not be exposed to the internet. Within that threat model, requiring a PIN or MAC allowlist adds friction without meaningful security benefit: anyone with physical access to the scanner already has access to the scanned documents.
+
+If your network model requires it, two approaches fit the existing protocol without changing the scanner firmware:
+
+**Option A — MAC allowlist** (simplest):
+Add an `allowed_macs` list to `config.yaml`; reject unknown MACs with 403 in the `POST /device` handler.
+
+**Option B — password auth** (protocol-native):
+Return `auth_type: "password"` from `GET /authorization`; the scanner prompts the operator for a PIN on its own keypad before showing the job list. Validate in `POST /authorization`.
