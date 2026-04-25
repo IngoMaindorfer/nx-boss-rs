@@ -36,6 +36,7 @@ mod pdf;
 mod retention;
 mod routes;
 mod state;
+mod translations;
 
 #[derive(Parser)]
 #[command(about = "PaperStream NX Manager compatible server")]

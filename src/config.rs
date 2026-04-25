@@ -16,6 +16,12 @@ pub struct RawConfig {
     pub jobs: IndexMap<String, RawJob>,
     #[serde(default)]
     pub retention: RetentionConfig,
+    #[serde(default = "default_lang")]
+    pub lang: String,
+}
+
+fn default_lang() -> String {
+    "de".to_string()
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
@@ -53,6 +59,17 @@ pub struct RetentionConfig {
 pub struct Config {
     pub jobs: Vec<Job>,
     pub retention: RetentionConfig,
+    pub lang: String,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            jobs: Vec::new(),
+            retention: RetentionConfig::default(),
+            lang: "de".to_string(),
+        }
+    }
 }
 
 impl Config {
@@ -73,6 +90,7 @@ impl Config {
         Ok(Self {
             jobs,
             retention: raw.retention,
+            lang: raw.lang,
         })
     }
 
@@ -85,6 +103,7 @@ impl Config {
         let raw = RawConfig {
             jobs: map,
             retention: retention.clone(),
+            lang: "de".to_string(),
         };
         let yaml = serde_yaml::to_string(&raw).context("serializing config")?;
         std::fs::write(path, yaml).context("writing config file")?;

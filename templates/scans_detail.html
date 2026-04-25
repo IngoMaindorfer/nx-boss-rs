@@ -1,33 +1,33 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-header">
-  <h2>Scan-Details</h2>
-  <a href="/scans" class="btn btn-secondary">Zurück</a>
+  <h2>{{ t.scan_detail_title }}</h2>
+  <a href="/scans" class="btn btn-secondary">{{ t.btn_back }}</a>
 </div>
 
 <div class="card">
   <table style="max-width:500px">
     <tr><th>Batch-ID</th><td style="font-family:monospace;font-size:.85rem">{{ batch_id }}</td></tr>
     <tr><th>Job</th><td>{{ job_name }}</td></tr>
-    <tr><th>Erstellt</th><td>{{ created_at }}</td></tr>
-    <tr><th>Seiten</th><td>{{ files.len() }}</td></tr>
-    <tr><th>Status</th><td>{% if completed %}abgeschlossen{% else %}offen{% endif %}</td></tr>
-    <tr><th>Auflösung</th><td>{{ resolution }} DPI</td></tr>
-    <tr><th>Farbmodus</th><td>{{ pixel_format }}</td></tr>
-    <tr><th>JPEG-Qualität</th><td>{{ jpeg_quality }}</td></tr>
-    <tr><th>Scanmodus</th><td>{% if source == "feeder" %}Doppelseitig{% else if source == "feederFront" %}Einseitig (Vorderseite){% else %}Einseitig (Rückseite){% endif %}</td></tr>
+    <tr><th>{{ t.lbl_created }}</th><td>{{ created_at }}</td></tr>
+    <tr><th>{{ t.col_pages }}</th><td>{{ files.len() }}</td></tr>
+    <tr><th>{{ t.col_status }}</th><td>{% if completed %}{{ t.status_completed }}{% else %}{{ t.status_open }}{% endif %}</td></tr>
+    <tr><th>{{ t.col_resolution }}</th><td>{{ resolution }} DPI</td></tr>
+    <tr><th>{{ t.field_pixel_format }}</th><td>{{ pixel_format }}</td></tr>
+    <tr><th>{{ t.field_jpeg_quality }}</th><td>{{ jpeg_quality }}</td></tr>
+    <tr><th>{{ t.field_source }}</th><td>{% if source == "feeder" %}{{ t.source_duplex }}{% else if source == "feederFront" %}{{ t.source_front }}{% else %}{{ t.source_rear }}{% endif %}</td></tr>
     {% if let Some(model) = scanner_model %}
-    <tr><th>Scanner-Modell</th><td>{{ model }}</td></tr>
+    <tr><th>{{ t.lbl_model }}</th><td>{{ model }}</td></tr>
     {% endif %}
     {% if let Some(serial) = scanner_serial %}
-    <tr><th>Seriennummer</th><td style="font-family:monospace">{{ serial }}</td></tr>
+    <tr><th>{{ t.lbl_serial }}</th><td style="font-family:monospace">{{ serial }}</td></tr>
     {% endif %}
   </table>
 </div>
 
 {% if !files.is_empty() %}
 <div class="card">
-  <h3>Seiten</h3>
+  <h3>{{ t.col_pages }}</h3>
   <div style="display:flex;flex-wrap:wrap;gap:1rem;margin-top:.5rem">
     {% for filename in files %}
     <div style="text-align:center">

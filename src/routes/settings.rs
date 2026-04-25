@@ -6,6 +6,7 @@ use super::ui::render;
 use crate::config::RetentionConfig;
 use crate::lock;
 use crate::state::AppState;
+use crate::translations::Translations;
 
 #[derive(Template)]
 #[template(path = "settings.html")]
@@ -14,6 +15,7 @@ struct SettingsTpl {
     delete_after_days: u32,
     saved: bool,
     error: Option<String>,
+    t: &'static Translations,
 }
 
 #[derive(Deserialize)]
@@ -29,6 +31,7 @@ pub async fn settings_get(State(state): State<AppState>) -> Response {
         delete_after_days: cfg.delete_after_days,
         saved: false,
         error: None,
+        t: state.translations,
     })
 }
 
@@ -44,7 +47,8 @@ pub async fn settings_post(
             archive_after_days: form.archive_after_days,
             delete_after_days: form.delete_after_days,
             saved: false,
-            error: Some("Löschfrist muss größer als Archivfrist sein".to_string()),
+            error: Some(state.translations.err_delete_gt_archive.to_string()),
+            t: state.translations,
         });
     }
     let new_cfg = RetentionConfig {
@@ -59,6 +63,7 @@ pub async fn settings_post(
         delete_after_days: new_cfg.delete_after_days,
         saved: true,
         error: None,
+        t: state.translations,
     })
 }
 
@@ -82,7 +87,7 @@ mod tests {
                 }),
                 scan_settings: serde_json::json!({}),
             }],
-            retention: Default::default(),
+            ..Default::default()
         };
         (TestServer::new(router(AppState::new(config))), tmp)
     }

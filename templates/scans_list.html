@@ -6,15 +6,15 @@
 
 <div class="card">
   {% if scans.is_empty() %}
-    <p class="empty">Noch keine Scans vorhanden.</p>
+    <p class="empty">{{ t.no_scans }}</p>
   {% else %}
   <table>
     <thead>
       <tr>
-        <th>Datum</th>
+        <th>{{ t.col_date }}</th>
         <th>Job</th>
-        <th>Seiten</th>
-        <th>Status</th>
+        <th>{{ t.col_pages }}</th>
+        <th>{{ t.col_status }}</th>
         <th></th>
       </tr>
     </thead>
@@ -24,8 +24,8 @@
         <td>{{ scan.created_at }}</td>
         <td>{{ scan.job_name }}</td>
         <td>{{ scan.page_count }}</td>
-        <td>{% if scan.completed %}abgeschlossen{% else %}offen{% endif %}</td>
-        <td><a href="/scans/{{ scan.batch_id }}" class="btn btn-sm btn-secondary">Details</a></td>
+        <td>{% if scan.completed %}{{ t.status_completed }}{% else %}{{ t.status_open }}{% endif %}</td>
+        <td><a href="/scans/{{ scan.batch_id }}" class="btn btn-sm btn-secondary">{{ t.btn_details }}</a></td>
       </tr>
       {% endfor %}
     </tbody>

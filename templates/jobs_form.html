@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-header">
-  <h2>{% if editing %}Job bearbeiten{% else %}Neuer Job{% endif %}</h2>
+  <h2>{% if editing %}{{ t.job_edit_title }}{% else %}{{ t.job_new_title }}{% endif %}</h2>
 </div>
 
 <div class="card">
@@ -23,24 +23,24 @@
     </div>
 
     <div class="field">
-      <label for="color">Farbe</label>
+      <label for="color">{{ t.field_color }}</label>
       <input id="color" name="color" type="color" value="{{ color }}">
     </div>
 
     <div class="field">
-      <label for="output_path">Ausgabepfad</label>
+      <label for="output_path">{{ t.field_output_path }}</label>
       <input id="output_path" name="output_path" type="text" value="{{ output_path }}" required
-             placeholder="/pfad/zum/ordner">
+             placeholder="{{ t.placeholder_path }}">
     </div>
 
     <div class="field">
-      <label for="consume_path">Consume-Pfad (optional)</label>
+      <label for="consume_path">{{ t.field_consume_path }}</label>
       <input id="consume_path" name="consume_path" type="text" value="{{ consume_path }}"
-             placeholder="z.B. /pfad/zum/paperless/consume">
+             placeholder="{{ t.placeholder_consume }}">
     </div>
 
     <div class="field">
-      <label for="resolution">Auflösung (DPI)</label>
+      <label for="resolution">{{ t.field_resolution }}</label>
       <select id="resolution" name="resolution">
         <option value="150"  {% if resolution == 150  %}selected{% endif %}>150 DPI</option>
         <option value="200"  {% if resolution == 200  %}selected{% endif %}>200 DPI</option>
@@ -51,31 +51,31 @@
     </div>
 
     <div class="field">
-      <label for="jpeg_quality">JPEG-Qualität</label>
+      <label for="jpeg_quality">{{ t.field_jpeg_quality }}</label>
       <input id="jpeg_quality" name="jpeg_quality" type="number" min="50" max="100"
              value="{{ jpeg_quality }}">
     </div>
 
     <div class="field">
-      <label for="pixel_format">Farbmodus</label>
+      <label for="pixel_format">{{ t.field_pixel_format }}</label>
       <select id="pixel_format" name="pixel_format">
-        <option value="rgb24"  {% if pixel_format == "rgb24"  %}selected{% endif %}>Farbe (RGB)</option>
-        <option value="gray8"  {% if pixel_format == "gray8"  %}selected{% endif %}>Graustufen</option>
+        <option value="rgb24"  {% if pixel_format == "rgb24"  %}selected{% endif %}>{{ t.pf_rgb }}</option>
+        <option value="gray8"  {% if pixel_format == "gray8"  %}selected{% endif %}>{{ t.pf_gray }}</option>
       </select>
     </div>
 
     <div class="field">
-      <label for="source">Scanmodus</label>
+      <label for="source">{{ t.field_source }}</label>
       <select id="source" name="source">
-        <option value="feeder"      {% if source == "feeder"      %}selected{% endif %}>Doppelseitig</option>
-        <option value="feederFront" {% if source == "feederFront" %}selected{% endif %}>Einseitig (Vorderseite)</option>
-        <option value="feederRear"  {% if source == "feederRear"  %}selected{% endif %}>Einseitig (Rückseite)</option>
+        <option value="feeder"      {% if source == "feeder"      %}selected{% endif %}>{{ t.source_duplex }}</option>
+        <option value="feederFront" {% if source == "feederFront" %}selected{% endif %}>{{ t.source_front }}</option>
+        <option value="feederRear"  {% if source == "feederRear"  %}selected{% endif %}>{{ t.source_rear }}</option>
       </select>
     </div>
 
     <div class="form-actions">
-      <button type="submit" class="btn btn-primary">Speichern</button>
-      <a href="/jobs" class="btn btn-secondary">Abbrechen</a>
+      <button type="submit" class="btn btn-primary">{{ t.btn_save }}</button>
+      <a href="/jobs" class="btn btn-secondary">{{ t.btn_cancel }}</a>
     </div>
   </form>
 </div>

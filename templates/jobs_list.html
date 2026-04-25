@@ -1,21 +1,21 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-header">
-  <h2>Scan-Jobs</h2>
-  <a href="/jobs/new" class="btn btn-primary">Neuer Job</a>
+  <h2>{{ t.nav_jobs }}</h2>
+  <a href="/jobs/new" class="btn btn-primary">{{ t.btn_new_job }}</a>
 </div>
 
 <div class="card">
   {% if jobs.is_empty() %}
-    <p class="empty">Keine Jobs konfiguriert.</p>
+    <p class="empty">{{ t.no_jobs }}</p>
   {% else %}
   <table>
     <thead>
       <tr>
         <th>Name</th>
-        <th>Auflösung</th>
-        <th>Farbe</th>
-        <th>Ausgabepfad</th>
+        <th>{{ t.col_resolution }}</th>
+        <th>{{ t.col_pixel_format }}</th>
+        <th>{{ t.col_output_path }}</th>
         <th></th>
       </tr>
     </thead>
@@ -27,15 +27,15 @@
           {{ job.name }}
         </td>
         <td>{{ job.resolution }} DPI</td>
-        <td>{% if job.pixel_format == "rgb24" %}Farbe{% else %}Graustufen{% endif %}</td>
+        <td>{% if job.pixel_format == "rgb24" %}{{ t.pf_rgb }}{% else %}{{ t.pf_gray }}{% endif %}</td>
         <td style="font-size:.8rem;color:#6c757d">{{ job.output_path }}</td>
         <td style="white-space:nowrap">
-          <a href="/jobs/{{ job.id }}/edit" class="btn btn-sm btn-secondary">Bearbeiten</a>
+          <a href="/jobs/{{ job.id }}/edit" class="btn btn-sm btn-secondary">{{ t.btn_edit }}</a>
           <button class="btn btn-sm btn-danger"
                   hx-delete="/jobs/{{ job.id }}"
-                  hx-confirm="Job &quot;{{ job.name }}&quot; wirklich löschen?"
+                  hx-confirm="{{ t.confirm_delete_pre }}&quot;{{ job.name }}&quot;{{ t.confirm_delete_suf }}"
                   hx-target="body"
-                  hx-push-url="/jobs">Löschen</button>
+                  hx-push-url="/jobs">{{ t.btn_delete }}</button>
         </td>
       </tr>
       {% endfor %}

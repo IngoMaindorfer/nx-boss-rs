@@ -6,18 +6,18 @@
        hx-get="/api/scanner-status"
        hx-trigger="load, every 10s"
        hx-swap="outerHTML">
-    <span class="badge badge-offline">offline</span>
+    <span class="badge badge-offline">{{ t.status_offline }}</span>
   </div>
 </div>
 
 <div class="stat-grid">
   <div class="stat">
     <div class="stat-value">{{ recent_scans.len() }}</div>
-    <div class="stat-label">Letzte Scans</div>
+    <div class="stat-label">{{ t.dash_recent_scans }}</div>
   </div>
   <div class="stat">
     <div class="stat-value">{{ jobs.len() }}</div>
-    <div class="stat-label">Scan-Jobs</div>
+    <div class="stat-label">{{ t.nav_jobs }}</div>
   </div>
   <div class="stat">
     <div class="stat-value" style="font-size:1rem">{{ scanner_name }}</div>
@@ -26,28 +26,28 @@
   {% if let Some(model) = scanner_model %}
   <div class="stat">
     <div class="stat-value" style="font-size:1rem">{{ model }}</div>
-    <div class="stat-label">Modell</div>
+    <div class="stat-label">{{ t.lbl_model }}</div>
   </div>
   {% endif %}
   {% if let Some(serial) = scanner_serial %}
   <div class="stat">
     <div class="stat-value" style="font-size:.85rem">{{ serial }}</div>
-    <div class="stat-label">Seriennummer</div>
+    <div class="stat-label">{{ t.lbl_serial }}</div>
   </div>
   {% endif %}
 </div>
 
 <div class="card">
-  <h3>Scan-Jobs</h3>
+  <h3>{{ t.nav_jobs }}</h3>
   {% if jobs.is_empty() %}
-    <p class="empty">Keine Jobs konfiguriert. <a href="/jobs/new">Jetzt anlegen</a></p>
+    <p class="empty">{{ t.no_jobs }} <a href="/jobs/new">{{ t.create_now }}</a></p>
   {% else %}
   <ul style="list-style:none;display:flex;flex-wrap:wrap;gap:.5rem">
     {% for job in jobs %}
     <li>
       <span class="color-dot" style="background:{{ job.color }}"></span>
       <a href="/jobs/{{ job.id }}/edit">{{ job.name }}</a>
-      <span style="color:#999;font-size:.8rem">{{ job.resolution }} DPI &middot; {{ job.pixel_format }} &middot; {% if job.source == "feeder" %}2-seitig{% else %}1-seitig{% endif %}</span>
+      <span style="color:#999;font-size:.8rem">{{ job.resolution }} DPI &middot; {{ job.pixel_format }} &middot; {% if job.source == "feeder" %}{{ t.source_duplex }}{% else %}{{ t.source_simplex }}{% endif %}</span>
     </li>
     {% endfor %}
   </ul>
@@ -55,21 +55,21 @@
 </div>
 
 <div class="card">
-  <h3>Letzte Scans</h3>
+  <h3>{{ t.dash_recent_scans }}</h3>
   {% if recent_scans.is_empty() %}
-    <p class="empty">Noch keine Scans vorhanden.</p>
+    <p class="empty">{{ t.no_scans }}</p>
   {% else %}
   <table>
     <thead>
       <tr>
-        <th>Datum</th>
+        <th>{{ t.col_date }}</th>
         <th>Job</th>
-        <th>Seiten</th>
+        <th>{{ t.col_pages }}</th>
         <th>DPI</th>
-        <th>Farbe</th>
-        <th>Modus</th>
+        <th>{{ t.col_pixel_format }}</th>
+        <th>{{ t.col_mode }}</th>
         <th>Scanner</th>
-        <th>Status</th>
+        <th>{{ t.col_status }}</th>
         <th></th>
       </tr>
     </thead>
@@ -81,10 +81,10 @@
         <td>{{ scan.page_count }}</td>
         <td>{{ scan.resolution }}</td>
         <td>{{ scan.pixel_format }}</td>
-        <td>{% if scan.source == "feeder" %}2-seitig{% else %}1-seitig{% endif %}</td>
+        <td>{% if scan.source == "feeder" %}{{ t.source_duplex }}{% else %}{{ t.source_simplex }}{% endif %}</td>
         <td>{% if let Some(m) = scan.scanner_model %}{{ m }}{% else %}—{% endif %}</td>
-        <td>{% if scan.completed %}abgeschlossen{% else %}offen{% endif %}</td>
-        <td><a href="/scans/{{ scan.batch_id }}" class="btn btn-sm btn-secondary">Details</a></td>
+        <td>{% if scan.completed %}{{ t.status_completed }}{% else %}{{ t.status_open }}{% endif %}</td>
+        <td><a href="/scans/{{ scan.batch_id }}" class="btn btn-sm btn-secondary">{{ t.btn_details }}</a></td>
       </tr>
       {% endfor %}
     </tbody>

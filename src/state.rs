@@ -6,6 +6,7 @@ use chrono::{DateTime, Local};
 
 use crate::batch::Batch;
 use crate::config::{Config, Job, RetentionConfig};
+use crate::translations::Translations;
 
 /// Scanner is considered offline after this many seconds without a ping.
 const SCANNER_ONLINE_THRESHOLD_SECS: i64 = 60;
@@ -29,11 +30,13 @@ pub struct AppState {
     pub scanner_serial: Arc<Mutex<Option<String>>>,
     pub retention: Arc<Mutex<RetentionConfig>>,
     pub config_path: Option<PathBuf>,
+    pub translations: &'static Translations,
 }
 
 impl AppState {
     pub fn new(config: Config) -> Self {
         Self {
+            translations: crate::translations::for_lang(&config.lang),
             jobs: Arc::new(Mutex::new(config.jobs)),
             batches: Arc::new(Mutex::new(HashMap::new())),
             last_scanner_ping: Arc::new(Mutex::new(None)),

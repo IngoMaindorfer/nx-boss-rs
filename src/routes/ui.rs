@@ -9,6 +9,7 @@ use crate::batch::BatchMetadata;
 use crate::config::Job;
 use crate::lock;
 use crate::state::AppState;
+use crate::translations::Translations;
 
 // ---------------------------------------------------------------------------
 // Template rendering helper (shared by all UI sub-modules)
@@ -133,6 +134,7 @@ struct DashboardTpl {
     scanner_serial: Option<String>,
     recent_scans: Vec<ScanEntry>,
     jobs: Vec<JobRow>,
+    t: &'static Translations,
 }
 
 #[derive(Template)]
@@ -141,6 +143,7 @@ struct ScannerStatusTpl {
     online: bool,
     name: String,
     model: Option<String>,
+    t: &'static Translations,
 }
 
 // ---------------------------------------------------------------------------
@@ -162,6 +165,7 @@ pub async fn dashboard(State(state): State<AppState>) -> Response {
         scanner_serial: serial,
         recent_scans,
         jobs: job_rows,
+        t: state.translations,
     })
 }
 
@@ -170,6 +174,7 @@ pub async fn scanner_status(State(state): State<AppState>) -> Response {
         online: state.scanner_is_online(),
         name: state.scanner_display_name(),
         model: state.scanner_display_model(),
+        t: state.translations,
     })
 }
 
@@ -197,7 +202,7 @@ mod tests {
                 }),
                 scan_settings: serde_json::json!({}),
             }],
-            retention: Default::default(),
+            ..Default::default()
         };
         (TestServer::new(router(AppState::new(config))), tmp)
     }

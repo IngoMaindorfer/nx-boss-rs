@@ -153,7 +153,7 @@ mod tests {
                 }),
                 scan_settings: json!({}),
             }],
-            retention: Default::default(),
+            ..Default::default()
         };
         let server = TestServer::new(router(AppState::new(config)));
         (server, tmp)

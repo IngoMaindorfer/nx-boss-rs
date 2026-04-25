@@ -1,11 +1,11 @@
 {% if online %}
 <span id="scanner-status" class="badge badge-online"
       hx-get="/api/scanner-status" hx-trigger="every 10s" hx-swap="outerHTML">
-  online &mdash; {{ name }}{% if let Some(m) = model %} ({{ m }}){% endif %}
+  {{ t.status_online }} &mdash; {{ name }}{% if let Some(m) = model %} ({{ m }}){% endif %}
 </span>
 {% else %}
 <span id="scanner-status" class="badge badge-offline"
       hx-get="/api/scanner-status" hx-trigger="every 10s" hx-swap="outerHTML">
-  offline
+  {{ t.status_offline }}
 </span>
 {% endif %}

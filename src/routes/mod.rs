@@ -132,7 +132,7 @@ mod tests {
                 }),
                 scan_settings: json!({}),
             }],
-            retention: Default::default(),
+            ..Default::default()
         };
         (TestServer::new(super::router(AppState::new(config))), tmp)
     }

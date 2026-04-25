@@ -1,47 +1,43 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-header">
-  <h2>Einstellungen</h2>
+  <h2>{{ t.nav_settings }}</h2>
 </div>
 
 <div class="card">
   {% if saved %}
   <div style="background:#e8f5e9;color:#2e7d32;padding:.75rem 1rem;border-radius:6px;font-size:.875rem;margin-bottom:1rem;">
-    Gespeichert.
+    {{ t.settings_saved }}
   </div>
   {% endif %}
   {% if let Some(msg) = error %}
   <div class="alert-error">{{ msg }}</div>
   {% endif %}
 
-  <h3>Aufbewahrungsfristen</h3>
+  <h3>{{ t.settings_retention_title }}</h3>
   <p style="font-size:.875rem;color:#6c757d;margin-bottom:1.25rem;">
-    Abgeschlossene Scans werden zuerst komprimiert und später gelöscht.
-    Fristen werden stündlich geprüft. <strong>0 = deaktiviert.</strong>
+    {{ t.settings_retention_desc1 }}
+    {{ t.settings_retention_desc2 }}
+    <strong>{{ t.settings_zero_disabled }}</strong>
   </p>
 
   <form class="edit-form" method="post" action="/settings">
     <div class="field">
-      <label for="archive_after_days">Archivieren nach (Tage)</label>
+      <label for="archive_after_days">{{ t.settings_archive_label }}</label>
       <input id="archive_after_days" name="archive_after_days" type="number"
              min="0" max="3650" value="{{ archive_after_days }}">
-      <span style="font-size:.8rem;color:#6c757d;">
-        Batch-Verzeichnis wird als <code>.tar.zst</code> komprimiert (Stufe&nbsp;3).
-      </span>
+      <span style="font-size:.8rem;color:#6c757d;">{{ t.settings_archive_hint }}</span>
     </div>
 
     <div class="field">
-      <label for="delete_after_days">Löschen nach (Tage)</label>
+      <label for="delete_after_days">{{ t.settings_delete_label }}</label>
       <input id="delete_after_days" name="delete_after_days" type="number"
              min="0" max="3650" value="{{ delete_after_days }}">
-      <span style="font-size:.8rem;color:#6c757d;">
-        Archiv (oder Verzeichnis, falls kein Archiv) wird endgültig gelöscht.
-        Muss größer als die Archivfrist sein.
-      </span>
+      <span style="font-size:.8rem;color:#6c757d;">{{ t.settings_delete_hint }}</span>
     </div>
 
     <div class="form-actions">
-      <button type="submit" class="btn btn-primary">Speichern</button>
+      <button type="submit" class="btn btn-primary">{{ t.btn_save }}</button>
     </div>
   </form>
 </div>

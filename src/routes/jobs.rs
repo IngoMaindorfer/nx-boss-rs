@@ -11,11 +11,13 @@ use super::ui::{JobRow, job_rows, render};
 use crate::config::{Job, MAX_JOB_NAME_LEN, MAX_PATH_LEN};
 use crate::lock;
 use crate::state::AppState;
+use crate::translations::Translations;
 
 #[derive(Template)]
 #[template(path = "jobs_list.html")]
 struct JobsListTpl {
     jobs: Vec<JobRow>,
+    t: &'static Translations,
 }
 
 #[derive(Template)]
@@ -32,6 +34,7 @@ struct JobsFormTpl {
     pixel_format: String,
     source: String,
     error: Option<String>,
+    t: &'static Translations,
 }
 
 #[derive(Deserialize)]
@@ -56,10 +59,11 @@ pub async fn jobs_list(State(state): State<AppState>) -> Response {
     let jobs = lock!(state.jobs);
     render(JobsListTpl {
         jobs: job_rows(&jobs),
+        t: state.translations,
     })
 }
 
-pub async fn jobs_new() -> Response {
+pub async fn jobs_new(State(state): State<AppState>) -> Response {
     render(JobsFormTpl {
         editing: false,
         job_id: 0,
@@ -72,13 +76,14 @@ pub async fn jobs_new() -> Response {
         pixel_format: "rgb24".to_string(),
         source: "feeder".to_string(),
         error: None,
+        t: state.translations,
     })
 }
 
 pub async fn jobs_create(State(state): State<AppState>, Form(form): Form<JobFormData>) -> Response {
-    let new_job = match apply_job_form(&form) {
+    let new_job = match apply_job_form(&form, state.translations) {
         Ok(j) => j,
-        Err(e) => return render(form_to_tpl(false, 0, &form, Some(e))),
+        Err(e) => return render(form_to_tpl(false, 0, &form, Some(e), state.translations)),
     };
     let snapshot = {
         let mut jobs = lock!(state.jobs);
@@ -116,6 +121,7 @@ pub async fn jobs_edit(Path(id): Path<usize>, State(state): State<AppState>) -> 
         pixel_format: job.pixel_format().to_string(),
         source: job.source().to_string(),
         error: None,
+        t: state.translations,
     })
 }
 
@@ -124,9 +130,9 @@ pub async fn jobs_update(
     State(state): State<AppState>,
     Form(form): Form<JobFormData>,
 ) -> Response {
-    let updated = match apply_job_form(&form) {
+    let updated = match apply_job_form(&form, state.translations) {
         Ok(j) => j,
-        Err(e) => return render(form_to_tpl(true, id, &form, Some(e))),
+        Err(e) => return render(form_to_tpl(true, id, &form, Some(e), state.translations)),
     };
     let snapshot = {
         let mut jobs = lock!(state.jobs);
@@ -161,15 +167,19 @@ pub async fn jobs_delete(Path(id): Path<usize>, State(state): State<AppState>) -
     Redirect::to("/jobs").into_response()
 }
 
-fn apply_job_form(form: &JobFormData) -> Result<Job, String> {
+fn apply_job_form(form: &JobFormData, t: &'static Translations) -> Result<Job, String> {
     if form.name.trim().is_empty() {
-        return Err("Name darf nicht leer sein".to_string());
+        return Err(t.err_name_empty.to_string());
     }
     if form.name.trim().len() > MAX_JOB_NAME_LEN {
-        return Err(format!("Name zu lang (max. {MAX_JOB_NAME_LEN} Zeichen)"));
+        return Err(t
+            .err_name_too_long
+            .replace("{0}", &MAX_JOB_NAME_LEN.to_string()));
     }
     if form.output_path.trim().len() > MAX_PATH_LEN {
-        return Err(format!("Ausgabepfad zu lang (max. {MAX_PATH_LEN} Zeichen)"));
+        return Err(t
+            .err_path_too_long
+            .replace("{0}", &MAX_PATH_LEN.to_string()));
     }
     crate::config::validate_hex_color(form.color.trim()).map_err(|e| e.to_string())?;
     let yaml = job_form_to_yaml(form);
@@ -178,7 +188,7 @@ fn apply_job_form(form: &JobFormData) -> Result<Job, String> {
         .jobs
         .into_iter()
         .next()
-        .ok_or_else(|| "Ungültige Konfiguration".to_string())
+        .ok_or_else(|| t.err_invalid_config.to_string())
 }
 
 fn job_form_to_yaml(form: &JobFormData) -> String {
@@ -216,6 +226,7 @@ fn job_form_to_yaml(form: &JobFormData) -> String {
     serde_yaml::to_string(&RawConfig {
         jobs,
         retention: Default::default(),
+        lang: Default::default(),
     })
     .unwrap_or_default()
 }
@@ -225,6 +236,7 @@ fn form_to_tpl(
     job_id: usize,
     form: &JobFormData,
     error: Option<String>,
+    t: &'static Translations,
 ) -> JobsFormTpl {
     JobsFormTpl {
         editing,
@@ -238,6 +250,7 @@ fn form_to_tpl(
         jpeg_quality: form.jpeg_quality,
         pixel_format: form.pixel_format.clone(),
         source: form.source.clone(),
+        t,
     }
 }
 
@@ -262,7 +275,7 @@ mod tests {
                 }),
                 scan_settings: json!({}),
             }],
-            retention: Default::default(),
+            ..Default::default()
         };
         (TestServer::new(router(AppState::new(config))), tmp)
     }

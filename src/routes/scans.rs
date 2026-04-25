@@ -9,11 +9,13 @@ use super::ui::{ScanEntry, find_batch_dir, list_scans, render};
 use crate::batch::{BatchMetadata, JobConfig};
 use crate::lock;
 use crate::state::AppState;
+use crate::translations::Translations;
 
 #[derive(Template)]
 #[template(path = "scans_list.html")]
 struct ScansListTpl {
     scans: Vec<ScanEntry>,
+    t: &'static Translations,
 }
 
 #[derive(Template)]
@@ -30,12 +32,16 @@ struct ScansDetailTpl {
     pixel_format: String,
     jpeg_quality: u8,
     source: String,
+    t: &'static Translations,
 }
 
 pub async fn scans_list(State(state): State<AppState>) -> Response {
     let jobs = lock!(state.jobs);
     let scans = list_scans(&jobs, 100);
-    render(ScansListTpl { scans })
+    render(ScansListTpl {
+        scans,
+        t: state.translations,
+    })
 }
 
 pub async fn scans_detail(Path(batch_id): Path<String>, State(state): State<AppState>) -> Response {
@@ -69,6 +75,7 @@ pub async fn scans_detail(Path(batch_id): Path<String>, State(state): State<AppS
         pixel_format,
         jpeg_quality,
         source,
+        t: state.translations,
     })
 }
 
@@ -118,7 +125,7 @@ mod tests {
                 }),
                 scan_settings: json!({}),
             }],
-            retention: Default::default(),
+            ..Default::default()
         };
         (TestServer::new(router(AppState::new(config))), tmp)
     }

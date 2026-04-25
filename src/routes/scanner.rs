@@ -126,7 +126,7 @@ mod tests {
                 }),
                 scan_settings: json!({ "parameters": {} }),
             }],
-            retention: Default::default(),
+            ..Default::default()
         };
         TestServer::new(router(AppState::new(config)))
     }
@@ -134,7 +134,7 @@ mod tests {
     fn empty_server() -> TestServer {
         let config = Config {
             jobs: vec![],
-            retention: Default::default(),
+            ..Default::default()
         };
         TestServer::new(router(AppState::new(config)))
     }
