@@ -2,7 +2,7 @@ use crate::state::AppState;
 use axum::{
     Router,
     extract::{DefaultBodyLimit, Request},
-    http::header,
+    http::{StatusCode, header},
     middleware::{self, Next},
     response::Response,
     routing::{delete, get, post, put},
@@ -11,7 +11,7 @@ use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 use ui::{
     dashboard, jobs_create, jobs_delete, jobs_edit, jobs_list, jobs_new, jobs_update,
-    scanner_status, scans_detail, scans_file, scans_list,
+    scanner_status, scans_detail, scans_file, scans_list, settings_get, settings_post,
 };
 
 mod batch;
@@ -55,12 +55,17 @@ async fn force_json(mut req: Request, next: Next) -> Response {
     next.run(req).await
 }
 
+async fn health() -> StatusCode {
+    StatusCode::OK
+}
+
 pub fn router(state: AppState) -> Router {
     let trace_layer = TraceLayer::new_for_http()
         .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
         .on_response(DefaultOnResponse::new().level(Level::INFO));
 
     Router::new()
+        .route("/health", get(health))
         // UI
         .route("/", get(dashboard))
         .route("/api/scanner-status", get(scanner_status))
@@ -73,6 +78,8 @@ pub fn router(state: AppState) -> Router {
         .route("/scans", get(scans_list))
         .route("/scans/{id}", get(scans_detail))
         .route("/scans/{id}/files/{filename}", get(scans_file))
+        .route("/settings", get(settings_get))
+        .route("/settings", post(settings_post))
         // Scanner protocol
         .route("/NmWebService/heartbeat", get(scanner::heartbeat))
         .route("/NmWebService/device", post(scanner::device))
@@ -118,6 +125,7 @@ mod tests {
                 }),
                 scan_settings: json!({}),
             }],
+            retention: Default::default(),
         };
         (TestServer::new(super::router(AppState::new(config))), tmp)
     }

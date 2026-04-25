@@ -2,17 +2,28 @@ use axum::{
     Json,
     extract::{Multipart, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use tracing::{info, warn};
 
 use crate::state::AppState;
 
-pub async fn post_image(
-    State(state): State<AppState>,
-    mut multipart: Multipart,
-) -> impl IntoResponse {
+struct ParsedImage {
+    filename: String,
+    content: Vec<u8>,
+    parameters: Value,
+}
+
+fn bad_request(msg: impl std::fmt::Display) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "error": msg.to_string() })),
+    )
+        .into_response()
+}
+
+async fn parse_multipart(mut multipart: Multipart) -> Result<ParsedImage, Response> {
     let mut image_filename: Option<String> = None;
     let mut image_bytes: Option<Vec<u8>> = None;
     let mut parameter_bytes: Option<Vec<u8>> = None;
@@ -25,11 +36,7 @@ pub async fn post_image(
                     Ok(b) => image_bytes = Some(b.to_vec()),
                     Err(e) => {
                         warn!(error = ?e, "failed to read image field");
-                        return (
-                            StatusCode::BAD_REQUEST,
-                            Json(json!({ "error": e.to_string() })),
-                        )
-                            .into_response();
+                        return Err(bad_request(e));
                     }
                 }
             }
@@ -37,11 +44,7 @@ pub async fn post_image(
                 Ok(b) => parameter_bytes = Some(b.to_vec()),
                 Err(e) => {
                     warn!(error = %e, "failed to read parameter field");
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(json!({ "error": e.to_string() })),
-                    )
-                        .into_response();
+                    return Err(bad_request(e));
                 }
             },
             // imageparameter field is accepted but not used
@@ -56,44 +59,41 @@ pub async fn post_image(
         Some(b) => b,
         None => {
             warn!("post_image: missing image field");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "missing image field" })),
-            )
-                .into_response();
+            return Err(bad_request("missing image field"));
         }
     };
-    let parameters: serde_json::Value = match parameter_bytes {
+    let parameters: Value = match parameter_bytes {
         Some(b) => match serde_json::from_slice(&b) {
             Ok(v) => v,
             Err(e) => {
                 warn!(error = %e, "post_image: invalid parameter JSON");
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": format!("invalid parameter JSON: {e}") })),
-                )
-                    .into_response();
+                return Err(bad_request(format!("invalid parameter JSON: {e}")));
             }
         },
         None => {
             warn!("post_image: missing parameter field");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "missing parameter field" })),
-            )
-                .into_response();
+            return Err(bad_request("missing parameter field"));
         }
     };
 
-    let batch_id = match parameters["batch_id"].as_str() {
+    Ok(ParsedImage {
+        filename,
+        content,
+        parameters,
+    })
+}
+
+pub async fn post_image(State(state): State<AppState>, multipart: Multipart) -> impl IntoResponse {
+    let parsed = match parse_multipart(multipart).await {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+
+    let batch_id = match parsed.parameters["batch_id"].as_str() {
         Some(id) => id.to_string(),
         None => {
             warn!("post_image: missing batch_id in parameter JSON");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "missing batch_id in parameter" })),
-            )
-                .into_response();
+            return bad_request("missing batch_id in parameter");
         }
     };
 
@@ -106,23 +106,19 @@ pub async fn post_image(
         }
     };
 
-    match batch.add_file(&filename, &content, parameters) {
+    match batch.add_file(&parsed.filename, &parsed.content, parsed.parameters) {
         Ok(()) => {
             info!(
                 batch_id = %batch_id,
-                filename = %filename,
-                bytes = content.len(),
+                filename = %parsed.filename,
+                bytes = parsed.content.len(),
                 "image saved"
             );
             StatusCode::OK.into_response()
         }
         Err(e) if e.to_string().contains("bad filename") => {
-            warn!(batch_id = %batch_id, filename = %filename, "post_image: path traversal rejected");
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "bad filename" })),
-            )
-                .into_response()
+            warn!(batch_id = %batch_id, filename = %parsed.filename, "post_image: path traversal rejected");
+            bad_request("bad filename")
         }
         Err(e) => {
             warn!(batch_id = %batch_id, error = %e, "post_image: failed to save image");
@@ -156,6 +152,7 @@ mod tests {
                 }),
                 scan_settings: json!({}),
             }],
+            retention: Default::default(),
         };
         let server = TestServer::new(router(AppState::new(config)));
         (server, tmp)

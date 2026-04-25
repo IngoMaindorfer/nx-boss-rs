@@ -5,24 +5,23 @@ use axum::{
     response::IntoResponse,
 };
 use serde_json::{Value, json};
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::batch::{Batch, ScannerInfo};
+use crate::lock;
 use crate::state::AppState;
 
 pub async fn post_batch(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    debug!(body = %body, "POST /batch body");
-
     // Scanner may send job_id as integer or string
     let job_id = match body.get("job_id") {
         Some(Value::Number(n)) => n.as_u64().unwrap_or(0) as usize,
         Some(Value::String(s)) => match s.parse::<usize>() {
             Ok(n) => n,
             Err(_) => {
-                warn!(body = %body, "post_batch: invalid job_id string");
+                warn!("post_batch: invalid job_id string");
                 return (
                     StatusCode::UNPROCESSABLE_ENTITY,
                     Json(json!({ "error": "invalid job_id" })),
@@ -31,7 +30,7 @@ pub async fn post_batch(
             }
         },
         other => {
-            warn!(body = %body, got = ?other, "post_batch: missing or wrong type for job_id");
+            warn!(got = ?other, "post_batch: missing or wrong type for job_id");
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(json!({ "error": "missing job_id" })),
@@ -40,7 +39,7 @@ pub async fn post_batch(
         }
     };
 
-    let jobs = state.jobs.lock().unwrap();
+    let jobs = lock!(state.jobs);
     if job_id >= jobs.len() {
         warn!(job_id, "post_batch: job_id out of range");
         return (
@@ -53,15 +52,15 @@ pub async fn post_batch(
     let job = jobs[job_id].clone();
     drop(jobs);
     let scanner = ScannerInfo {
-        model: state.scanner_model.lock().unwrap().clone(),
-        serial: state.scanner_serial.lock().unwrap().clone(),
+        model: lock!(state.scanner_model).clone(),
+        serial: lock!(state.scanner_serial).clone(),
     };
     match Batch::create(&job, scanner) {
         Ok(batch) => {
             let id = batch.id.clone();
             let job_name = job.job_info["name"].as_str().unwrap_or("?").to_string();
             info!(batch_id = %id, job_id, job_name, "batch created");
-            state.batches.lock().unwrap().insert(id.clone(), batch);
+            lock!(state.batches).insert(id.clone(), batch);
             (StatusCode::OK, Json(json!({ "batch_id": id }))).into_response()
         }
         Err(e) => {
@@ -79,24 +78,31 @@ pub async fn put_batch(
     Path(batch_id): Path<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    let mut batches = state.batches.lock().unwrap();
-    if let Some(batch) = batches.get_mut(&batch_id) {
-        if let Err(e) = batch.complete() {
+    // Remove from map before I/O so the lock is not held during file writes / PDF assembly.
+    let mut batch = match lock!(state.batches).remove(&batch_id) {
+        Some(b) => b,
+        None => {
+            warn!(batch_id = %batch_id, "put_batch: unknown batch_id");
+            return StatusCode::NOT_FOUND.into_response();
+        }
+    };
+    // Lock is released here — complete() may do significant file I/O.
+    match batch.complete() {
+        Ok(()) => {
+            info!(batch_id = %batch_id, n_files = batch.metadata().files.len(), "batch completed");
+            StatusCode::OK.into_response()
+        }
+        Err(e) => {
             warn!(batch_id = %batch_id, error = %e, "failed to complete batch");
-            return (
+            // Re-insert so the scanner can retry.
+            lock!(state.batches).insert(batch_id, batch);
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": e.to_string() })),
             )
-                .into_response();
+                .into_response()
         }
-    } else {
-        warn!(batch_id = %batch_id, "put_batch: unknown batch_id");
-        return StatusCode::NOT_FOUND.into_response();
     }
-    let n_files = batches[&batch_id].metadata().files.len();
-    batches.remove(&batch_id);
-    info!(batch_id = %batch_id, n_files, "batch completed");
-    StatusCode::OK.into_response()
 }
 
 #[cfg(test)]
@@ -120,12 +126,16 @@ mod tests {
                 }),
                 scan_settings: json!({}),
             }],
+            retention: Default::default(),
         };
         (TestServer::new(router(AppState::new(config))), tmp)
     }
 
     fn empty_server() -> TestServer {
-        let config = Config { jobs: vec![] };
+        let config = Config {
+            jobs: vec![],
+            retention: Default::default(),
+        };
         TestServer::new(router(AppState::new(config)))
     }
 

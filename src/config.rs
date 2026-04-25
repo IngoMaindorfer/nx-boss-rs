@@ -6,11 +6,16 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+pub const MAX_JOB_NAME_LEN: usize = 100;
+pub const MAX_PATH_LEN: usize = 500;
+
 static DEFAULTS_YAML: &str = include_str!("../defaults.yaml");
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct RawConfig {
     pub jobs: IndexMap<String, RawJob>,
+    #[serde(default)]
+    pub retention: RetentionConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
@@ -34,9 +39,20 @@ pub struct Job {
     pub scan_settings: Value,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct RetentionConfig {
+    /// 0 = disabled. Completed batches older than this are compressed to .tar.zst.
+    #[serde(default)]
+    pub archive_after_days: u32,
+    /// 0 = disabled. Archives (or dirs if archiving is off) older than this are deleted.
+    #[serde(default)]
+    pub delete_after_days: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub jobs: Vec<Job>,
+    pub retention: RetentionConfig,
 }
 
 impl Config {
@@ -54,16 +70,22 @@ impl Config {
             .enumerate()
             .map(|(id, (name, job))| Job::parse(id, name, job))
             .collect::<Result<Vec<_>>>()?;
-        Ok(Self { jobs })
+        Ok(Self {
+            jobs,
+            retention: raw.retention,
+        })
     }
 
-    pub fn save(jobs: &[Job], path: &Path) -> Result<()> {
+    pub fn save(jobs: &[Job], retention: &RetentionConfig, path: &Path) -> Result<()> {
         let mut map = IndexMap::new();
         for job in jobs {
             let (name, raw) = job.to_raw();
             map.insert(name, raw);
         }
-        let raw = RawConfig { jobs: map };
+        let raw = RawConfig {
+            jobs: map,
+            retention: retention.clone(),
+        };
         let yaml = serde_yaml::to_string(&raw).context("serializing config")?;
         std::fs::write(path, yaml).context("writing config file")?;
         Ok(())
@@ -137,18 +159,19 @@ impl Job {
     }
 
     fn parse(id: usize, name: String, raw: RawJob) -> Result<Self> {
+        let color = raw.color.clone().unwrap_or_else(|| "#4D4D4D".to_string());
+        validate_hex_color(&color).with_context(|| format!("job {name:?}: invalid color"))?;
+
         let output_path = PathBuf::from(&raw.output_path);
-        if !output_path.is_dir() {
-            bail!("output_path {:?} is not a directory", output_path);
-        }
+        check_dir_writable(&output_path)
+            .with_context(|| format!("job {name:?}: output_path {:?}", output_path))?;
 
         let consume_path = raw
             .consume_path
-            .map(|p| {
+            .map(|p| -> Result<PathBuf> {
                 let path = PathBuf::from(&p);
-                if !path.is_dir() {
-                    bail!("consume_path {:?} is not a directory", path);
-                }
+                check_dir_writable(&path)
+                    .with_context(|| format!("job {name:?}: consume_path {:?}", path))?;
                 Ok(path)
             })
             .transpose()?;
@@ -160,7 +183,7 @@ impl Job {
             "type": 0,
             "job_id": id,
             "name": name,
-            "color": raw.color.unwrap_or_else(|| "#4D4D4D".to_string()),
+            "color": color,
             "job_setting": job_settings,
             "hierarchy_list": null,
         });
@@ -172,6 +195,27 @@ impl Job {
             scan_settings,
         })
     }
+}
+
+pub fn validate_hex_color(color: &str) -> Result<()> {
+    let s = color.trim();
+    let valid = s.starts_with('#')
+        && (s.len() == 7 || s.len() == 4)
+        && s[1..].chars().all(|c| c.is_ascii_hexdigit());
+    if !valid {
+        bail!("color must be #RRGGBB or #RGB hex, got: {s:?}");
+    }
+    Ok(())
+}
+
+fn check_dir_writable(path: &Path) -> Result<()> {
+    if !path.is_dir() {
+        bail!("{} is not a directory", path.display());
+    }
+    let probe = path.join(".nx_boss_write_probe");
+    std::fs::write(&probe, b"").with_context(|| format!("{} is not writable", path.display()))?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(())
 }
 
 fn default_job_settings() -> Value {

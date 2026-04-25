@@ -9,7 +9,8 @@ use serde::Deserialize;
 use tracing::warn;
 
 use crate::batch::{BatchMetadata, JobConfig};
-use crate::config::Job;
+use crate::config::{Job, MAX_JOB_NAME_LEN, MAX_PATH_LEN, RetentionConfig};
+use crate::lock;
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -99,6 +100,15 @@ struct JobsFormTpl {
 #[template(path = "scans_list.html")]
 struct ScansListTpl {
     scans: Vec<ScanEntry>,
+}
+
+#[derive(Template)]
+#[template(path = "settings.html")]
+struct SettingsTpl {
+    archive_after_days: u32,
+    delete_after_days: u32,
+    saved: bool,
+    error: Option<String>,
 }
 
 #[derive(Template)]
@@ -197,7 +207,7 @@ pub async fn dashboard(State(state): State<AppState>) -> Response {
     let name = state.scanner_display_name();
     let model = state.scanner_display_model();
     let serial = state.scanner_display_serial();
-    let jobs = state.jobs.lock().unwrap();
+    let jobs = lock!(state.jobs);
     let recent_scans = list_scans(&jobs, 10);
     let job_rows = job_rows(&jobs);
     render(DashboardTpl {
@@ -223,7 +233,7 @@ pub async fn scanner_status(State(state): State<AppState>) -> Response {
 // ---------------------------------------------------------------------------
 
 pub async fn jobs_list(State(state): State<AppState>) -> Response {
-    let jobs = state.jobs.lock().unwrap();
+    let jobs = lock!(state.jobs);
     render(JobsListTpl {
         jobs: job_rows(&jobs),
     })
@@ -264,43 +274,24 @@ fn default_source() -> String {
 }
 
 pub async fn jobs_create(State(state): State<AppState>, Form(form): Form<JobFormData>) -> Response {
-    let yaml = job_form_to_yaml(&form);
-    match crate::config::Config::parse(&yaml) {
-        Ok(parsed) => {
-            if parsed.jobs.is_empty() {
-                return render(form_to_tpl(
-                    false,
-                    0,
-                    &form,
-                    Some("Ungültige Konfiguration".to_string()),
-                ));
-            }
-            let new_job = parsed.jobs.into_iter().next().unwrap();
-            {
-                let mut jobs = state.jobs.lock().unwrap();
-                let id = jobs.len();
-                // fix job_id to actual position
-                let mut info = new_job.job_info.clone();
-                info["job_id"] = serde_json::json!(id);
-                let job = Job {
-                    job_info: info,
-                    ..new_job
-                };
-                jobs.push(job);
-                if let Some(ref path) = state.config_path
-                    && let Err(e) = crate::config::Config::save(&jobs, path)
-                {
-                    warn!(error = %e, "failed to save config");
-                }
-            }
-            Redirect::to("/jobs").into_response()
-        }
-        Err(e) => render(form_to_tpl(false, 0, &form, Some(e.to_string()))),
-    }
+    let new_job = match apply_job_form(&form) {
+        Ok(j) => j,
+        Err(e) => return render(form_to_tpl(false, 0, &form, Some(e))),
+    };
+    let mut jobs = lock!(state.jobs);
+    let id = jobs.len();
+    let mut info = new_job.job_info.clone();
+    info["job_id"] = serde_json::json!(id);
+    jobs.push(Job {
+        job_info: info,
+        ..new_job
+    });
+    save_config(&state, &jobs);
+    Redirect::to("/jobs").into_response()
 }
 
 pub async fn jobs_edit(Path(id): Path<usize>, State(state): State<AppState>) -> Response {
-    let jobs = state.jobs.lock().unwrap();
+    let jobs = lock!(state.jobs);
     let Some(job) = jobs.get(id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -328,43 +319,26 @@ pub async fn jobs_update(
     State(state): State<AppState>,
     Form(form): Form<JobFormData>,
 ) -> Response {
-    let yaml = job_form_to_yaml(&form);
-    match crate::config::Config::parse(&yaml) {
-        Ok(parsed) => {
-            if parsed.jobs.is_empty() {
-                return render(form_to_tpl(
-                    true,
-                    id,
-                    &form,
-                    Some("Ungültige Konfiguration".to_string()),
-                ));
-            }
-            let updated = parsed.jobs.into_iter().next().unwrap();
-            {
-                let mut jobs = state.jobs.lock().unwrap();
-                if id >= jobs.len() {
-                    return StatusCode::NOT_FOUND.into_response();
-                }
-                let mut info = updated.job_info.clone();
-                info["job_id"] = serde_json::json!(id);
-                jobs[id] = Job {
-                    job_info: info,
-                    ..updated
-                };
-                if let Some(ref path) = state.config_path
-                    && let Err(e) = crate::config::Config::save(&jobs, path)
-                {
-                    warn!(error = %e, "failed to save config");
-                }
-            }
-            Redirect::to("/jobs").into_response()
-        }
-        Err(e) => render(form_to_tpl(true, id, &form, Some(e.to_string()))),
+    let updated = match apply_job_form(&form) {
+        Ok(j) => j,
+        Err(e) => return render(form_to_tpl(true, id, &form, Some(e))),
+    };
+    let mut jobs = lock!(state.jobs);
+    if id >= jobs.len() {
+        return StatusCode::NOT_FOUND.into_response();
     }
+    let mut info = updated.job_info.clone();
+    info["job_id"] = serde_json::json!(id);
+    jobs[id] = Job {
+        job_info: info,
+        ..updated
+    };
+    save_config(&state, &jobs);
+    Redirect::to("/jobs").into_response()
 }
 
 pub async fn jobs_delete(Path(id): Path<usize>, State(state): State<AppState>) -> Response {
-    let mut jobs = state.jobs.lock().unwrap();
+    let mut jobs = lock!(state.jobs);
     if id >= jobs.len() {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -373,13 +347,63 @@ pub async fn jobs_delete(Path(id): Path<usize>, State(state): State<AppState>) -
     for (i, job) in jobs.iter_mut().enumerate() {
         job.job_info["job_id"] = serde_json::json!(i);
     }
-    if let Some(ref path) = state.config_path
-        && let Err(e) = crate::config::Config::save(&jobs, path)
-    {
-        warn!(error = %e, "failed to save config after delete");
-    }
+    save_config(&state, &jobs);
     // HTMX: respond with updated jobs list fragment; plain browser: redirect
     Redirect::to("/jobs").into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Handlers — Settings
+// ---------------------------------------------------------------------------
+
+pub async fn settings_get(State(state): State<AppState>) -> Response {
+    let cfg = lock!(state.retention).clone();
+    render(SettingsTpl {
+        archive_after_days: cfg.archive_after_days,
+        delete_after_days: cfg.delete_after_days,
+        saved: false,
+        error: None,
+    })
+}
+
+#[derive(Deserialize)]
+pub struct SettingsFormData {
+    pub archive_after_days: u32,
+    pub delete_after_days: u32,
+}
+
+pub async fn settings_post(
+    State(state): State<AppState>,
+    Form(form): Form<SettingsFormData>,
+) -> Response {
+    if form.archive_after_days > 0
+        && form.delete_after_days > 0
+        && form.delete_after_days <= form.archive_after_days
+    {
+        return render(SettingsTpl {
+            archive_after_days: form.archive_after_days,
+            delete_after_days: form.delete_after_days,
+            saved: false,
+            error: Some("Löschfrist muss größer als Archivfrist sein".to_string()),
+        });
+    }
+    let new_cfg = RetentionConfig {
+        archive_after_days: form.archive_after_days,
+        delete_after_days: form.delete_after_days,
+    };
+    *lock!(state.retention) = new_cfg.clone();
+    let jobs = lock!(state.jobs);
+    if let Some(ref path) = state.config_path
+        && let Err(e) = crate::config::Config::save(&jobs, &new_cfg, path)
+    {
+        warn!(error = %e, "failed to save retention config");
+    }
+    render(SettingsTpl {
+        archive_after_days: new_cfg.archive_after_days,
+        delete_after_days: new_cfg.delete_after_days,
+        saved: true,
+        error: None,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -387,13 +411,13 @@ pub async fn jobs_delete(Path(id): Path<usize>, State(state): State<AppState>) -
 // ---------------------------------------------------------------------------
 
 pub async fn scans_list(State(state): State<AppState>) -> Response {
-    let jobs = state.jobs.lock().unwrap();
+    let jobs = lock!(state.jobs);
     let scans = list_scans(&jobs, 100);
     render(ScansListTpl { scans })
 }
 
 pub async fn scans_detail(Path(batch_id): Path<String>, State(state): State<AppState>) -> Response {
-    let jobs = state.jobs.lock().unwrap();
+    let jobs = lock!(state.jobs);
     let Some(dir) = find_batch_dir(&jobs, &batch_id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -430,7 +454,7 @@ pub async fn scans_file(
     Path((batch_id, filename)): Path<(String, String)>,
     State(state): State<AppState>,
 ) -> Response {
-    let jobs = state.jobs.lock().unwrap();
+    let jobs = lock!(state.jobs);
     let Some(dir) = find_batch_dir(&jobs, &batch_id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -488,7 +512,40 @@ fn job_form_to_yaml(form: &JobFormData) -> String {
     };
     let mut jobs = IndexMap::new();
     jobs.insert(form.name.trim().to_string(), raw_job);
-    serde_yaml::to_string(&RawConfig { jobs }).unwrap_or_default()
+    serde_yaml::to_string(&RawConfig {
+        jobs,
+        retention: Default::default(),
+    })
+    .unwrap_or_default()
+}
+
+fn apply_job_form(form: &JobFormData) -> Result<Job, String> {
+    if form.name.trim().is_empty() {
+        return Err("Name darf nicht leer sein".to_string());
+    }
+    if form.name.trim().len() > MAX_JOB_NAME_LEN {
+        return Err(format!("Name zu lang (max. {MAX_JOB_NAME_LEN} Zeichen)"));
+    }
+    if form.output_path.trim().len() > MAX_PATH_LEN {
+        return Err(format!("Ausgabepfad zu lang (max. {MAX_PATH_LEN} Zeichen)"));
+    }
+    crate::config::validate_hex_color(form.color.trim()).map_err(|e| e.to_string())?;
+    let yaml = job_form_to_yaml(form);
+    let parsed = crate::config::Config::parse(&yaml).map_err(|e| e.to_string())?;
+    parsed
+        .jobs
+        .into_iter()
+        .next()
+        .ok_or_else(|| "Ungültige Konfiguration".to_string())
+}
+
+fn save_config(state: &AppState, jobs: &[Job]) {
+    let retention = lock!(state.retention).clone();
+    if let Some(ref path) = state.config_path
+        && let Err(e) = crate::config::Config::save(jobs, &retention, path)
+    {
+        warn!(error = %e, "failed to save config");
+    }
 }
 
 fn form_to_tpl(
@@ -537,6 +594,7 @@ mod tests {
                 }),
                 scan_settings: json!({}),
             }],
+            retention: Default::default(),
         };
         let server = TestServer::new(router(AppState::new(config)));
         (server, tmp)
@@ -753,5 +811,58 @@ mod tests {
                 .status_code(),
             404
         );
+    }
+
+    // --- Settings ---
+
+    #[tokio::test]
+    async fn test_settings_get_returns_200() {
+        let (server, _tmp) = test_server();
+        assert_eq!(server.get("/settings").await.status_code(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_settings_post_saves_and_shows_confirmation() {
+        let (server, _tmp) = test_server();
+        let resp = server
+            .post("/settings")
+            .form(&[("archive_after_days", "7"), ("delete_after_days", "30")])
+            .await;
+        assert_eq!(resp.status_code(), 200);
+        assert!(resp.text().contains("Gespeichert"));
+    }
+
+    #[tokio::test]
+    async fn test_settings_post_rejects_invalid_thresholds() {
+        let (server, _tmp) = test_server();
+        // delete <= archive must be rejected
+        let resp = server
+            .post("/settings")
+            .form(&[("archive_after_days", "30"), ("delete_after_days", "7")])
+            .await;
+        assert_eq!(resp.status_code(), 200);
+        assert!(resp.text().contains("Löschfrist"));
+    }
+
+    #[tokio::test]
+    async fn test_settings_post_both_zero_is_valid() {
+        let (server, _tmp) = test_server();
+        let resp = server
+            .post("/settings")
+            .form(&[("archive_after_days", "0"), ("delete_after_days", "0")])
+            .await;
+        assert_eq!(resp.status_code(), 200);
+        assert!(resp.text().contains("Gespeichert"));
+    }
+
+    #[tokio::test]
+    async fn test_settings_post_archive_only_no_delete_is_valid() {
+        let (server, _tmp) = test_server();
+        let resp = server
+            .post("/settings")
+            .form(&[("archive_after_days", "7"), ("delete_after_days", "0")])
+            .await;
+        assert_eq!(resp.status_code(), 200);
+        assert!(resp.text().contains("Gespeichert"));
     }
 }

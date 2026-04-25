@@ -7,6 +7,19 @@ services:
     volumes:
       - ./config.yaml:/config/config.yaml:ro
       - scans:/data
+    environment:
+      - RUST_LOG=nx_boss_rs=info
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      test: ["/wget", "-q", "--spider", "http://localhost:10447/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - internal
 

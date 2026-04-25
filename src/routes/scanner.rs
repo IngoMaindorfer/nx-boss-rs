@@ -12,7 +12,7 @@ use crate::batch::now_iso;
 use crate::state::AppState;
 
 pub async fn heartbeat(State(state): State<AppState>) -> Json<Value> {
-    *state.last_scanner_ping.lock().unwrap() = Some(chrono::Local::now());
+    state.record_ping();
     debug!("heartbeat");
     Json(json!({ "system_time": now_iso() }))
 }
@@ -34,16 +34,17 @@ pub async fn device(
     State(state): State<AppState>,
     Json(payload): Json<DevicePayload>,
 ) -> Json<Value> {
-    *state.last_scanner_ping.lock().unwrap() = Some(chrono::Local::now());
-    *state.scanner_name.lock().unwrap() = Some(payload.scanner_name.clone());
-    *state.scanner_model.lock().unwrap() = Some(payload.scanner_model.clone());
-    *state.scanner_serial.lock().unwrap() = Some(payload.serial_no.clone());
     info!(
         scanner_name = %payload.scanner_name,
         scanner_model = %payload.scanner_model,
         serial_no = %payload.serial_no,
         scanner_ip = %payload.scanner_ip,
         "scanner registered"
+    );
+    state.set_scanner_info(
+        payload.scanner_name,
+        payload.scanner_model,
+        payload.serial_no,
     );
     Json(json!({ "system_time": now_iso(), "server_version": "2.6.0.4" }))
 }
@@ -124,12 +125,16 @@ mod tests {
                 }),
                 scan_settings: json!({ "parameters": {} }),
             }],
+            retention: Default::default(),
         };
         TestServer::new(router(AppState::new(config)))
     }
 
     fn empty_server() -> TestServer {
-        let config = Config { jobs: vec![] };
+        let config = Config {
+            jobs: vec![],
+            retention: Default::default(),
+        };
         TestServer::new(router(AppState::new(config)))
     }
 

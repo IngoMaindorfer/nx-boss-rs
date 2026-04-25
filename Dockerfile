@@ -14,10 +14,15 @@ COPY templates/ templates/
 
 RUN cargo build --release --target x86_64-unknown-linux-musl
 
+FROM alpine:3 AS tools
+RUN apk add --no-cache wget
 
 FROM scratch
 
 COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/nx-boss-rs /nx-boss-rs
+COPY --from=tools /usr/bin/wget /wget
+# wget needs SSL certs for https; for http-only healthcheck we just need the binary
+COPY --from=tools /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
 VOLUME ["/data", "/config"]
 EXPOSE 10447

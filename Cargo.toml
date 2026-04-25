@@ -21,6 +21,8 @@ clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 thiserror = "2"
 lopdf = "0.34"
+tar = "0.4"
+zstd = "0.13"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 askama = "0.12"

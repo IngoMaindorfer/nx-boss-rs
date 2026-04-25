@@ -153,6 +153,12 @@ impl Batch {
                 }
             })
             .collect();
+        // Fall back to batch ID if job name consists entirely of non-alphanumeric chars
+        let safe_name = if safe_name.is_empty() {
+            self.id.clone()
+        } else {
+            safe_name
+        };
         let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
         let base = format!("{safe_name}_{ts}");
 
@@ -201,9 +207,12 @@ impl Batch {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn metadata(&self) -> &BatchMetadata {
         &self.metadata
+    }
+
+    pub fn created_at(&self) -> &str {
+        &self.metadata.created_at
     }
 
     fn flush_metadata(&mut self) -> Result<()> {

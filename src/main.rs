@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 async fn shutdown_signal() {
@@ -33,6 +33,7 @@ async fn shutdown_signal() {
 mod batch;
 mod config;
 mod pdf;
+mod retention;
 mod routes;
 mod state;
 
@@ -57,11 +58,30 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let config = config::Config::load(&cli.config)?;
+    for job in &config.jobs {
+        info!(
+            job = job.name(),
+            output_path = %job.output_path.display(),
+            "path OK"
+        );
+        if let Some(ref cp) = job.consume_path {
+            info!(job = job.name(), consume_path = %cp.display(), "consume path OK");
+        }
+    }
+    if config.jobs.is_empty() {
+        warn!("no jobs configured — scanner will see an empty job list");
+    }
     info!("Loaded {} job(s)", config.jobs.len());
 
     let config_path = cli.config.canonicalize().unwrap_or(cli.config.clone());
     let state = state::AppState::new(config).with_config_path(config_path);
-    let app = routes::router(state);
+    let app = routes::router(state.clone());
+
+    tokio::spawn(retention::run_forever(
+        state.jobs.clone(),
+        state.retention.clone(),
+        state.batches.clone(),
+    ));
 
     let addr = format!("{}:{}", cli.host, cli.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
