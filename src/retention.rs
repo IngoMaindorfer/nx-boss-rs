@@ -36,7 +36,7 @@ pub async fn run_forever(
 }
 
 fn sweep_stale_batches(batches: &Arc<Mutex<HashMap<String, Batch>>>) {
-    let now = chrono::Local::now();
+    let now = chrono::Utc::now();
     let mut map = lock!(batches);
     let before = map.len();
     map.retain(|id, batch| {
@@ -58,7 +58,7 @@ fn sweep_stale_batches(batches: &Arc<Mutex<HashMap<String, Batch>>>) {
 }
 
 pub fn run_once(jobs: &[Job], cfg: &RetentionConfig) {
-    let now = chrono::Local::now();
+    let now = chrono::Utc::now();
     for job in jobs {
         let Ok(entries) = std::fs::read_dir(&job.output_path) else {
             warn!(path = %job.output_path.display(), "retention: cannot read output_path");
@@ -87,7 +87,7 @@ fn handle_archive(
     name: &str,
     output_path: &Path,
     cfg: &RetentionConfig,
-    now: &chrono::DateTime<chrono::Local>,
+    now: &chrono::DateTime<chrono::Utc>,
 ) {
     if cfg.delete_after_days == 0 {
         return;
@@ -110,7 +110,7 @@ fn handle_batch_dir(
     batch_id: &str,
     output_path: &Path,
     cfg: &RetentionConfig,
-    now: &chrono::DateTime<chrono::Local>,
+    now: &chrono::DateTime<chrono::Utc>,
 ) {
     let Ok(text) = std::fs::read_to_string(path.join("metadata.json")) else {
         return;
@@ -174,7 +174,7 @@ fn archive_age_days(
     batch_id: &str,
     output_path: &Path,
     archive_path: &Path,
-    now: &chrono::DateTime<chrono::Local>,
+    now: &chrono::DateTime<chrono::Utc>,
 ) -> i64 {
     // Prefer sidecar created_at so age is measured from original batch creation
     let sidecar = output_path.join(format!("{batch_id}.meta"));
@@ -190,13 +190,13 @@ fn archive_age_days(
         .ok()
         .and_then(|m| m.modified().ok())
         .map(|t| {
-            let dt: chrono::DateTime<chrono::Local> = t.into();
+            let dt: chrono::DateTime<chrono::Utc> = t.into();
             now.signed_duration_since(dt).num_days()
         })
         .unwrap_or(0)
 }
 
-fn parse_age_days(ts: &str, now: &chrono::DateTime<chrono::Local>) -> Option<i64> {
+fn parse_age_days(ts: &str, now: &chrono::DateTime<chrono::Utc>) -> Option<i64> {
     let created = chrono::DateTime::parse_from_rfc3339(ts).ok()?;
     Some(now.signed_duration_since(created).num_days())
 }

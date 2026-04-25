@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Utc};
 
 use crate::batch::Batch;
 use crate::config::{Config, Job, RetentionConfig};
@@ -23,7 +23,7 @@ macro_rules! lock {
 /// All mutable scanner state in one struct so it can be updated atomically under one lock.
 #[derive(Default, Clone)]
 struct ConnectedScanner {
-    last_ping: Option<DateTime<Local>>,
+    last_ping: Option<DateTime<Utc>>,
     name: Option<String>,
     model: Option<String>,
     serial: Option<String>,
@@ -61,7 +61,7 @@ impl AppState {
     pub fn scanner_is_online(&self) -> bool {
         lock!(self.scanner)
             .last_ping
-            .map(|t| (Local::now() - t).num_seconds() < SCANNER_ONLINE_THRESHOLD_SECS)
+            .map(|t| (Utc::now() - t).num_seconds() < SCANNER_ONLINE_THRESHOLD_SECS)
             .unwrap_or(false)
     }
 
@@ -81,12 +81,12 @@ impl AppState {
     }
 
     pub fn record_ping(&self) {
-        lock!(self.scanner).last_ping = Some(Local::now());
+        lock!(self.scanner).last_ping = Some(Utc::now());
     }
 
     pub fn set_scanner_info(&self, name: String, model: String, serial: String) {
         let mut s = lock!(self.scanner);
-        s.last_ping = Some(Local::now());
+        s.last_ping = Some(Utc::now());
         s.name = Some(name);
         s.model = Some(model);
         s.serial = Some(serial);

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use chrono::Local;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::config::Job;
 
 pub fn now_iso() -> String {
-    Local::now().to_rfc3339()
+    Utc::now().to_rfc3339()
 }
 
 /// Returned by [`Batch::add_file`] when the filename would escape the batch directory.
@@ -373,5 +373,16 @@ mod tests {
             Path::new("/output/batch/../escape.txt")
         ));
         assert!(!is_safe_path(base, Path::new("/etc/passwd")));
+    }
+
+    #[test]
+    fn test_now_iso_is_utc() {
+        // Timestamps stored in metadata must be UTC so age calculations are correct
+        // regardless of server timezone or DST transitions.
+        let ts = now_iso();
+        assert!(
+            ts.ends_with("+00:00") || ts.ends_with('Z'),
+            "now_iso() must produce a UTC timestamp, got: {ts}"
+        );
     }
 }

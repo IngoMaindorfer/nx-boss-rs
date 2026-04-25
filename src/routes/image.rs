@@ -99,6 +99,11 @@ pub async fn post_image(State(state): State<AppState>, multipart: Multipart) -> 
         }
     };
 
+    if !parsed.content.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        warn!(batch_id = %batch_id, filename = %parsed.filename, "post_image: not a JPEG");
+        return bad_request("not a JPEG image");
+    }
+
     let mut batches = lock!(state.batches);
     let batch = match batches.get_mut(&batch_id) {
         Some(b) => b,
@@ -246,8 +251,9 @@ mod tests {
         let batch_id = create_batch(&server).await;
         let boundary = "largeboundary";
         let param = json!({"batch_id": batch_id}).to_string();
-        // 3 MB of fake image data — well above axum's 2 MB default limit
-        let image = vec![0u8; 3 * 1024 * 1024];
+        // 3 MB of fake JPEG data — well above axum's 2 MB default limit
+        let mut image = vec![0u8; 3 * 1024 * 1024];
+        image[..3].copy_from_slice(&[0xFF, 0xD8, 0xFF]);
         let body = multipart_body(boundary, &image, "big.jpg", &param);
 
         let resp = server
@@ -267,6 +273,24 @@ mod tests {
         let boundary = "traversalboundary";
         let param = json!({"batch_id": batch_id}).to_string();
         let body = multipart_body(boundary, b"\xff\xd8\xff\xd9", "../escape.jpg", &param);
+
+        let resp = server
+            .post("/NmWebService/image")
+            .content_type(&format!("multipart/form-data; boundary={boundary}"))
+            .bytes(body.into())
+            .await;
+        assert_eq!(resp.status_code(), 400);
+    }
+
+    /// Non-JPEG content (missing FF D8 FF magic bytes) must be rejected with 400.
+    #[tokio::test]
+    async fn test_image_upload_non_jpeg_rejected() {
+        let (server, _tmp) = test_server();
+        let batch_id = create_batch(&server).await;
+        let boundary = "nonjpegboundary";
+        let param = json!({"batch_id": batch_id}).to_string();
+        // PNG magic bytes — definitely not a JPEG
+        let body = multipart_body(boundary, b"\x89PNG\r\n\x1a\n", "page.jpg", &param);
 
         let resp = server
             .post("/NmWebService/image")
