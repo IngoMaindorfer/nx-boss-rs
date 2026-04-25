@@ -72,7 +72,7 @@ pub async fn post_authorization(State(state): State<AppState>) -> Json<Value> {
     Json(json!({
         "access_token": "unused",
         "token_type": "bearer",
-        "job_group_name": "nx-boss",
+        "job_group_name": "nx-boss-rs",
         "job_info": job_info,
     }))
 }
