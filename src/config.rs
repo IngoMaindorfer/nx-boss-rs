@@ -9,6 +9,20 @@ use serde_json::{Value, json};
 pub const MAX_JOB_NAME_LEN: usize = 100;
 pub const MAX_PATH_LEN: usize = 500;
 
+// Default job values used at creation time and as fallbacks when reading existing jobs.
+pub const DEFAULT_COLOR: &str = "#4D4D4D";
+pub const DEFAULT_SOURCE: &str = "feeder";
+pub const DEFAULT_PIXEL_FORMAT: &str = "rgb24";
+pub const DEFAULT_RESOLUTION: u32 = 300;
+pub const DEFAULT_JPEG_QUALITY: u8 = 80;
+
+// NmWebService scan_settings JSON keys shared between config parsing and form handling.
+pub const KEY_RESOLUTION: &str = "resolution";
+pub const KEY_JPEG_QUALITY: &str = "jpegQuality";
+pub const KEY_PIXEL_FORMAT: &str = "pixelFormat";
+pub const KEY_SOURCE: &str = "source";
+pub const KEY_PIXEL_FORMATS: &str = "pixelFormats";
+
 static DEFAULTS_YAML: &str = include_str!("../defaults.yaml");
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -94,7 +108,7 @@ impl Config {
         })
     }
 
-    pub fn save(jobs: &[Job], retention: &RetentionConfig, path: &Path) -> Result<()> {
+    pub fn save(jobs: &[Job], retention: &RetentionConfig, lang: &str, path: &Path) -> Result<()> {
         let mut map = IndexMap::new();
         for job in jobs {
             let (name, raw) = job.to_raw();
@@ -103,7 +117,7 @@ impl Config {
         let raw = RawConfig {
             jobs: map,
             retention: retention.clone(),
-            lang: "de".to_string(),
+            lang: lang.to_string(),
         };
         let yaml = serde_yaml::to_string(&raw).context("serializing config")?;
         std::fs::write(path, yaml).context("writing config file")?;
@@ -117,7 +131,7 @@ impl Job {
     }
 
     pub fn color(&self) -> &str {
-        self.job_info["color"].as_str().unwrap_or("#4D4D4D")
+        self.job_info["color"].as_str().unwrap_or(DEFAULT_COLOR)
     }
 
     fn sources(&self) -> &Value {
@@ -133,35 +147,37 @@ impl Job {
     }
 
     pub fn resolution(&self) -> u32 {
-        self.pf_attr("resolution")
+        self.pf_attr(KEY_RESOLUTION)
             .and_then(|s| s.parse().ok())
-            .unwrap_or(300)
+            .unwrap_or(DEFAULT_RESOLUTION)
     }
 
     pub fn jpeg_quality(&self) -> u8 {
-        self.pf_attr("jpegQuality")
+        self.pf_attr(KEY_JPEG_QUALITY)
             .and_then(|s| s.parse().ok())
-            .unwrap_or(80)
+            .unwrap_or(DEFAULT_JPEG_QUALITY)
     }
 
     pub fn pixel_format(&self) -> &str {
-        self.sources()["pixelFormats"]["pixelFormat"]
+        self.sources()[KEY_PIXEL_FORMATS][KEY_PIXEL_FORMAT]
             .as_str()
-            .unwrap_or("rgb24")
+            .unwrap_or(DEFAULT_PIXEL_FORMAT)
     }
 
     pub fn source(&self) -> &str {
-        self.sources()["source"].as_str().unwrap_or("feeder")
+        self.sources()[KEY_SOURCE]
+            .as_str()
+            .unwrap_or(DEFAULT_SOURCE)
     }
 
     pub fn to_raw(&self) -> (String, RawJob) {
         let mut pf = HashMap::new();
-        pf.insert("resolution".to_string(), json!(self.resolution()));
-        pf.insert("jpegQuality".to_string(), json!(self.jpeg_quality()));
-        pf.insert("pixelFormat".to_string(), json!(self.pixel_format()));
+        pf.insert(KEY_RESOLUTION.to_string(), json!(self.resolution()));
+        pf.insert(KEY_JPEG_QUALITY.to_string(), json!(self.jpeg_quality()));
+        pf.insert(KEY_PIXEL_FORMAT.to_string(), json!(self.pixel_format()));
         let mut scan_settings = HashMap::new();
-        scan_settings.insert("pixelFormats".to_string(), json!(pf));
-        scan_settings.insert("source".to_string(), json!(self.source()));
+        scan_settings.insert(KEY_PIXEL_FORMATS.to_string(), json!(pf));
+        scan_settings.insert(KEY_SOURCE.to_string(), json!(self.source()));
         (
             self.name().to_string(),
             RawJob {
@@ -275,12 +291,26 @@ fn build_scan_settings(overrides: Option<&HashMap<String, Value>>) -> Result<Val
     Ok(settings)
 }
 
+const MAX_OVERRIDE_DEPTH: usize = 20;
+
 fn update_recursive(dest: &mut Value, src: &HashMap<String, Value>) -> Result<()> {
+    update_recursive_inner(dest, src, 0)
+}
+
+fn update_recursive_inner(
+    dest: &mut Value,
+    src: &HashMap<String, Value>,
+    depth: usize,
+) -> Result<()> {
+    if depth >= MAX_OVERRIDE_DEPTH {
+        bail!("scan_settings nesting too deep (max {MAX_OVERRIDE_DEPTH} levels)");
+    }
     for (key, value) in src {
         if let Value::Object(map) = value {
-            update_recursive(
+            update_recursive_inner(
                 &mut dest[key],
                 &map.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                depth + 1,
             )?;
             continue;
         }
@@ -425,6 +455,27 @@ mod tests {
     }
 
     #[test]
+    fn test_save_preserves_lang() {
+        let dir = make_output_dir();
+        let yaml = format!(
+            "lang: en\njobs:\n  x:\n    output_path: {}\n",
+            dir.path().display()
+        );
+        let config = Config::parse(&yaml).unwrap();
+        assert_eq!(config.lang, "en");
+
+        let cfg_path = dir.path().join("config.yaml");
+        Config::save(&config.jobs, &config.retention, &config.lang, &cfg_path).unwrap();
+
+        let saved = std::fs::read_to_string(&cfg_path).unwrap();
+        let reloaded = Config::parse(&saved).unwrap();
+        assert_eq!(
+            reloaded.lang, "en",
+            "lang must survive a save/reload round-trip"
+        );
+    }
+
+    #[test]
     fn test_bool_to_string_coercion() {
         let dir = make_output_dir();
         // source defaults have string "true"/"false" values; bool overrides must be coerced
@@ -441,5 +492,24 @@ mod tests {
             .find(|a| a["attribute"] == "automaticDeskew")
             .unwrap();
         assert_eq!(attr["values"]["value"], "false");
+    }
+
+    #[test]
+    fn test_deeply_nested_scan_settings_is_rejected() {
+        let dir = make_output_dir();
+        // Build a 25-level nested YAML map — exceeds the recursion limit in update_recursive.
+        // Without a depth guard this would stack-overflow on pathological config files.
+        let mut inner = "  leaf: 1".to_string();
+        for i in 0..25 {
+            inner = format!("  key{i}:\n  {}", inner.replace('\n', "\n  "));
+        }
+        let yaml = format!(
+            "jobs:\n  x:\n    output_path: {}\n    scan_settings:\n{inner}\n",
+            dir.path().display()
+        );
+        assert!(
+            Config::parse(&yaml).is_err(),
+            "deeply nested scan_settings must be rejected"
+        );
     }
 }

@@ -52,8 +52,8 @@ pub async fn post_batch(
     let job = jobs[job_id].clone();
     drop(jobs);
     let scanner = ScannerInfo {
-        model: lock!(state.scanner_model).clone(),
-        serial: lock!(state.scanner_serial).clone(),
+        model: state.scanner_display_model(),
+        serial: state.scanner_display_serial(),
     };
     match Batch::create(&job, scanner) {
         Ok(batch) => {

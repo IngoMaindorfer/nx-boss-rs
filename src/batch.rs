@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -11,6 +11,20 @@ use crate::config::Job;
 pub fn now_iso() -> String {
     Local::now().to_rfc3339()
 }
+
+/// Returned by [`Batch::add_file`] when the filename would escape the batch directory.
+/// Typed so callers can distinguish path-traversal rejections from I/O errors without
+/// fragile string matching.
+#[derive(Debug)]
+pub struct PathTraversalError;
+
+impl std::fmt::Display for PathTraversalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("filename escapes batch directory")
+    }
+}
+
+impl std::error::Error for PathTraversalError {}
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ScannerInfo {
@@ -100,15 +114,10 @@ impl Batch {
 
     pub fn add_file(&mut self, filename: &str, content: &[u8], parameters: Value) -> Result<()> {
         let file_path = self.dir.join(filename);
-        // Reject path traversal: resolved parent must equal the batch dir
-        if file_path
-            .canonicalize()
-            .unwrap_or(file_path.clone())
-            .parent()
-            != Some(self.dir.as_path())
-            && !is_safe_path(&self.dir, &self.dir.join(filename))
-        {
-            bail!("bad filename");
+        // is_safe_path normalises ".." components without requiring the file to exist,
+        // which canonicalize() cannot do (it requires an existing path).
+        if !is_safe_path(&self.dir, &file_path) {
+            return Err(PathTraversalError.into());
         }
         std::fs::write(&file_path, content)?;
         self.metadata.files.push(FileEntry {
@@ -132,15 +141,37 @@ impl Batch {
         // Blank-page filtering is intentionally left to Paperless-NGX (consume pipeline).
         // The fi-7300NX does not support blankPageSkip in hardware and we avoid
         // duplicating post-processing that the consumer already handles.
-        let pages: Vec<Vec<u8>> = self
-            .metadata
+        let pages = self.load_pages()?;
+        let pdf = crate::pdf::assemble_pdf(&pages)?;
+        let base = self.output_filename_base();
+        let sidecar = self.build_sidecar(&base);
+
+        // Write JSON sidecar first — present before PDF triggers Paperless consumption.
+        // A pre-consume script can read {basename}.json to set title/tags via the API.
+        std::fs::write(
+            consume_path.join(format!("{base}.json")),
+            serde_json::to_string_pretty(&sidecar)?,
+        )?;
+        std::fs::write(consume_path.join(format!("{base}.pdf")), pdf)?;
+
+        tracing::info!(
+            filename = %format!("{base}.pdf"),
+            pages = self.metadata.files.len(),
+            "PDF + JSON sidecar delivered to consume folder"
+        );
+        Ok(())
+    }
+
+    fn load_pages(&self) -> Result<Vec<Vec<u8>>> {
+        self.metadata
             .files
             .iter()
-            .map(|f| std::fs::read(self.dir.join(&f.filename)))
-            .collect::<Result<_, _>>()?;
+            .map(|f| std::fs::read(self.dir.join(&f.filename)).map_err(anyhow::Error::from))
+            .collect()
+    }
 
-        let pdf = crate::pdf::assemble_pdf(&pages)?;
-
+    /// Returns a filesystem-safe `<jobname>_<timestamp>` base suitable for `.pdf` / `.json`.
+    fn output_filename_base(&self) -> String {
         let safe_name: String = self
             .metadata
             .job_name
@@ -153,16 +184,20 @@ impl Batch {
                 }
             })
             .collect();
-        // Fall back to batch ID if job name consists entirely of non-alphanumeric chars
+        // Fall back to batch ID if job name consists entirely of non-alphanumeric chars.
         let safe_name = if safe_name.is_empty() {
             self.id.clone()
         } else {
             safe_name
         };
-        let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        let base = format!("{safe_name}_{ts}");
+        format!(
+            "{safe_name}_{}",
+            chrono::Local::now().format("%Y%m%d_%H%M%S")
+        )
+    }
 
-        // Normalise job name to a slug for the tag (e.g. "My Job" → "my-job")
+    fn build_sidecar(&self, base: &str) -> Value {
+        // Normalise job name to a slug for the Paperless tag (e.g. "My Job" → "my-job").
         let tag: String = self
             .metadata
             .job_name
@@ -175,9 +210,9 @@ impl Batch {
                 }
             })
             .collect();
-        let created_date = &self.metadata.created_at.get(..10).unwrap_or("");
-        let sidecar = serde_json::json!({
-            "title": format!("{} {}", self.metadata.job_name, created_date),
+        let created_date = self.metadata.created_at.get(..10).unwrap_or("");
+        serde_json::json!({
+            "title": format!("{} {created_date}", self.metadata.job_name),
             "created": created_date,
             "tags": ["scan", tag],
             "correspondent": null,
@@ -188,23 +223,9 @@ impl Batch {
                 "pixel_format": &self.metadata.job_config.pixel_format,
                 "source": &self.metadata.job_config.source,
                 "scanner_model": self.metadata.scanner.model.as_deref().unwrap_or(""),
+                "filename_base": base,
             }
-        });
-
-        // Write JSON sidecar first — present before PDF triggers Paperless consumption.
-        // A pre-consume script can read {basename}.json to set title/tags via the API.
-        let json_path = consume_path.join(format!("{base}.json"));
-        std::fs::write(&json_path, serde_json::to_string_pretty(&sidecar)?)?;
-
-        let pdf_path = consume_path.join(format!("{base}.pdf"));
-        std::fs::write(&pdf_path, pdf)?;
-
-        tracing::info!(
-            filename = %format!("{base}.pdf"),
-            pages = self.metadata.files.len(),
-            "PDF + JSON sidecar delivered to consume folder"
-        );
-        Ok(())
+        })
     }
 
     pub fn metadata(&self) -> &BatchMetadata {
@@ -225,7 +246,7 @@ impl Batch {
 }
 
 /// Returns false if `path` escapes `base` via `..` components.
-fn is_safe_path(base: &Path, path: &Path) -> bool {
+pub fn is_safe_path(base: &Path, path: &Path) -> bool {
     // Normalize without requiring the path to exist
     let mut normalized = PathBuf::new();
     for component in path.components() {

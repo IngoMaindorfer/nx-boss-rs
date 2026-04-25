@@ -7,6 +7,7 @@ use axum::{
 use serde_json::{Value, json};
 use tracing::{info, warn};
 
+use crate::batch::PathTraversalError;
 use crate::lock;
 use crate::state::AppState;
 
@@ -117,7 +118,7 @@ pub async fn post_image(State(state): State<AppState>, multipart: Multipart) -> 
             );
             StatusCode::OK.into_response()
         }
-        Err(e) if e.to_string().contains("bad filename") => {
+        Err(e) if e.downcast_ref::<PathTraversalError>().is_some() => {
             warn!(batch_id = %batch_id, filename = %parsed.filename, "post_image: path traversal rejected");
             bad_request("bad filename")
         }
@@ -255,6 +256,24 @@ mod tests {
             .bytes(body.into())
             .await;
         assert_eq!(resp.status_code(), 200);
+    }
+
+    /// Path traversal via a crafted filename must return 400, not 200 or 500.
+    /// This also tests that error detection is correct regardless of error message wording.
+    #[tokio::test]
+    async fn test_image_upload_path_traversal_rejected() {
+        let (server, _tmp) = test_server();
+        let batch_id = create_batch(&server).await;
+        let boundary = "traversalboundary";
+        let param = json!({"batch_id": batch_id}).to_string();
+        let body = multipart_body(boundary, b"\xff\xd8\xff\xd9", "../escape.jpg", &param);
+
+        let resp = server
+            .post("/NmWebService/image")
+            .content_type(&format!("multipart/form-data; boundary={boundary}"))
+            .bytes(body.into())
+            .await;
+        assert_eq!(resp.status_code(), 400);
     }
 
     /// Content-Type with uppercase Multipart/ prefix must not be clobbered by force_json.

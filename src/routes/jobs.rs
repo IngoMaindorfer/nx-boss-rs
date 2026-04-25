@@ -8,7 +8,11 @@ use axum::{
 use serde::Deserialize;
 
 use super::ui::{JobRow, job_rows, render};
-use crate::config::{Job, MAX_JOB_NAME_LEN, MAX_PATH_LEN};
+use crate::config::{
+    DEFAULT_COLOR, DEFAULT_JPEG_QUALITY, DEFAULT_PIXEL_FORMAT, DEFAULT_RESOLUTION, DEFAULT_SOURCE,
+    Job, KEY_JPEG_QUALITY, KEY_PIXEL_FORMAT, KEY_PIXEL_FORMATS, KEY_RESOLUTION, KEY_SOURCE,
+    MAX_JOB_NAME_LEN, MAX_PATH_LEN,
+};
 use crate::lock;
 use crate::state::AppState;
 use crate::translations::Translations;
@@ -52,7 +56,7 @@ pub struct JobFormData {
 }
 
 fn default_source() -> String {
-    "feeder".to_string()
+    DEFAULT_SOURCE.to_string()
 }
 
 pub async fn jobs_list(State(state): State<AppState>) -> Response {
@@ -68,13 +72,13 @@ pub async fn jobs_new(State(state): State<AppState>) -> Response {
         editing: false,
         job_id: 0,
         name: String::new(),
-        color: "#4D4D4D".to_string(),
+        color: DEFAULT_COLOR.to_string(),
         output_path: String::new(),
         consume_path: String::new(),
-        resolution: 300,
-        jpeg_quality: 80,
-        pixel_format: "rgb24".to_string(),
-        source: "feeder".to_string(),
+        resolution: DEFAULT_RESOLUTION,
+        jpeg_quality: DEFAULT_JPEG_QUALITY,
+        pixel_format: DEFAULT_PIXEL_FORMAT.to_string(),
+        source: DEFAULT_SOURCE.to_string(),
         error: None,
         t: state.translations,
     })
@@ -197,18 +201,24 @@ fn job_form_to_yaml(form: &JobFormData) -> String {
     use std::collections::HashMap;
 
     let mut scan_settings = HashMap::new();
-    scan_settings.insert("source".to_string(), serde_json::json!(form.source.trim()));
+    scan_settings.insert(
+        KEY_SOURCE.to_string(),
+        serde_json::json!(form.source.trim()),
+    );
     let mut pf = HashMap::new();
-    pf.insert("resolution".to_string(), serde_json::json!(form.resolution));
     pf.insert(
-        "jpegQuality".to_string(),
+        KEY_RESOLUTION.to_string(),
+        serde_json::json!(form.resolution),
+    );
+    pf.insert(
+        KEY_JPEG_QUALITY.to_string(),
         serde_json::json!(form.jpeg_quality),
     );
     pf.insert(
-        "pixelFormat".to_string(),
+        KEY_PIXEL_FORMAT.to_string(),
         serde_json::json!(form.pixel_format),
     );
-    scan_settings.insert("pixelFormats".to_string(), serde_json::json!(pf));
+    scan_settings.insert(KEY_PIXEL_FORMATS.to_string(), serde_json::json!(pf));
 
     let raw_job = RawJob {
         output_path: form.output_path.trim().to_string(),

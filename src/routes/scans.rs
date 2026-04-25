@@ -6,6 +6,7 @@ use axum::{
 };
 
 use super::ui::{ScanEntry, find_batch_dir, list_scans, render};
+use crate::batch::is_safe_path;
 use crate::batch::{BatchMetadata, JobConfig};
 use crate::lock;
 use crate::state::AppState;
@@ -87,10 +88,10 @@ pub async fn scans_file(
     let Some(dir) = find_batch_dir(&jobs, &batch_id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+    let file_path = dir.join(&filename);
+    if !is_safe_path(&dir, &file_path) {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let file_path = dir.join(&filename);
     match std::fs::read(&file_path) {
         Ok(bytes) => (
             [
@@ -181,6 +182,77 @@ mod tests {
                 .await
                 .status_code(),
             404
+        );
+    }
+
+    fn multipart_image(boundary: &str, batch_id: &str, filename: &str) -> Vec<u8> {
+        let param = format!(r#"{{"batch_id":"{batch_id}"}}"#);
+        let mut body = Vec::new();
+        let sep = format!("--{boundary}\r\n");
+        let end = format!("--{boundary}--\r\n");
+        body.extend_from_slice(sep.as_bytes());
+        body.extend_from_slice(
+            format!(
+                "Content-Disposition: form-data; name=\"image\"; filename=\"{filename}\"\r\n\
+                 Content-Type: image/jpeg\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(b"\xff\xd8\xff\xe0fake");
+        body.extend_from_slice(b"\r\n");
+        body.extend_from_slice(sep.as_bytes());
+        body.extend_from_slice(b"Content-Disposition: form-data; name=\"parameter\"\r\n\r\n");
+        body.extend_from_slice(param.as_bytes());
+        body.extend_from_slice(b"\r\n");
+        body.extend_from_slice(end.as_bytes());
+        body
+    }
+
+    #[tokio::test]
+    async fn test_scans_file_serves_existing_image() {
+        let (server, _tmp) = test_server();
+        let batch_id = server
+            .post("/NmWebService/batch")
+            .json(&json!({"job_id": 0}))
+            .await
+            .json::<Value>()["batch_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let boundary = "testboundary123";
+        let body = multipart_image(boundary, &batch_id, "page1.jpg");
+        server
+            .post("/NmWebService/image")
+            .bytes(body.into())
+            .content_type(&format!("multipart/form-data; boundary={boundary}"))
+            .await;
+        server.put(&format!("/NmWebService/batch/{batch_id}")).await;
+        let resp = server
+            .get(&format!("/scans/{batch_id}/files/page1.jpg"))
+            .await;
+        assert_eq!(resp.status_code(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_scans_file_rejects_dotdot_traversal() {
+        let (server, _tmp) = test_server();
+        let batch_id = server
+            .post("/NmWebService/batch")
+            .json(&json!({"job_id": 0}))
+            .await
+            .json::<Value>()["batch_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        server.put(&format!("/NmWebService/batch/{batch_id}")).await;
+        // URL-encoded ".." — axum decodes this before routing
+        let resp = server
+            .get(&format!("/scans/{batch_id}/files/..%2Fetc%2Fpasswd"))
+            .await;
+        assert!(
+            resp.status_code() == 400 || resp.status_code() == 404,
+            "traversal attempt must not return 200, got {}",
+            resp.status_code()
         );
     }
 }

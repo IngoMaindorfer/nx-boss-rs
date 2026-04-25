@@ -20,16 +20,23 @@ macro_rules! lock {
     };
 }
 
+/// All mutable scanner state in one struct so it can be updated atomically under one lock.
+#[derive(Default, Clone)]
+struct ConnectedScanner {
+    last_ping: Option<DateTime<Local>>,
+    name: Option<String>,
+    model: Option<String>,
+    serial: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub jobs: Arc<Mutex<Vec<Job>>>,
     pub batches: Arc<Mutex<HashMap<String, Batch>>>,
-    pub last_scanner_ping: Arc<Mutex<Option<DateTime<Local>>>>,
-    pub scanner_name: Arc<Mutex<Option<String>>>,
-    pub scanner_model: Arc<Mutex<Option<String>>>,
-    pub scanner_serial: Arc<Mutex<Option<String>>>,
+    scanner: Arc<Mutex<ConnectedScanner>>,
     pub retention: Arc<Mutex<RetentionConfig>>,
     pub config_path: Option<PathBuf>,
+    pub lang: String,
     pub translations: &'static Translations,
 }
 
@@ -37,12 +44,10 @@ impl AppState {
     pub fn new(config: Config) -> Self {
         Self {
             translations: crate::translations::for_lang(&config.lang),
+            lang: config.lang.clone(),
             jobs: Arc::new(Mutex::new(config.jobs)),
             batches: Arc::new(Mutex::new(HashMap::new())),
-            last_scanner_ping: Arc::new(Mutex::new(None)),
-            scanner_name: Arc::new(Mutex::new(None)),
-            scanner_model: Arc::new(Mutex::new(None)),
-            scanner_serial: Arc::new(Mutex::new(None)),
+            scanner: Arc::new(Mutex::new(ConnectedScanner::default())),
             retention: Arc::new(Mutex::new(config.retention)),
             config_path: None,
         }
@@ -54,42 +59,88 @@ impl AppState {
     }
 
     pub fn scanner_is_online(&self) -> bool {
-        lock!(self.last_scanner_ping)
+        lock!(self.scanner)
+            .last_ping
             .map(|t| (Local::now() - t).num_seconds() < SCANNER_ONLINE_THRESHOLD_SECS)
             .unwrap_or(false)
     }
 
     pub fn scanner_display_name(&self) -> String {
-        lock!(self.scanner_name)
+        lock!(self.scanner)
+            .name
             .clone()
             .unwrap_or_else(|| "—".to_string())
     }
 
     pub fn scanner_display_model(&self) -> Option<String> {
-        lock!(self.scanner_model).clone()
+        lock!(self.scanner).model.clone()
     }
 
     pub fn scanner_display_serial(&self) -> Option<String> {
-        lock!(self.scanner_serial).clone()
+        lock!(self.scanner).serial.clone()
     }
 
     pub fn record_ping(&self) {
-        *lock!(self.last_scanner_ping) = Some(Local::now());
+        lock!(self.scanner).last_ping = Some(Local::now());
     }
 
     pub fn set_scanner_info(&self, name: String, model: String, serial: String) {
-        self.record_ping();
-        *lock!(self.scanner_name) = Some(name);
-        *lock!(self.scanner_model) = Some(model);
-        *lock!(self.scanner_serial) = Some(serial);
+        let mut s = lock!(self.scanner);
+        s.last_ping = Some(Local::now());
+        s.name = Some(name);
+        s.model = Some(model);
+        s.serial = Some(serial);
     }
 
     pub fn persist_config(&self, jobs: &[Job]) {
         let retention = lock!(self.retention).clone();
         if let Some(ref path) = self.config_path
-            && let Err(e) = Config::save(jobs, &retention, path)
+            && let Err(e) = Config::save(jobs, &retention, &self.lang, path)
         {
             tracing::warn!(error = %e, "failed to save config");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+
+    fn make_state() -> AppState {
+        AppState::new(Config::default())
+    }
+
+    #[test]
+    fn test_scanner_offline_initially() {
+        assert!(!make_state().scanner_is_online());
+    }
+
+    #[test]
+    fn test_record_ping_makes_scanner_online() {
+        let s = make_state();
+        s.record_ping();
+        assert!(s.scanner_is_online());
+    }
+
+    #[test]
+    fn test_set_scanner_info_all_fields_visible() {
+        // All three fields must be readable after a single set_scanner_info call.
+        // The refactored single-lock implementation guarantees this atomically;
+        // the old three-lock version had a window where fields could be inconsistent.
+        let s = make_state();
+        s.set_scanner_info("fi-8170".into(), "fi-8170".into(), "SN001".into());
+        assert_eq!(s.scanner_display_name(), "fi-8170");
+        assert_eq!(s.scanner_display_model(), Some("fi-8170".into()));
+        assert_eq!(s.scanner_display_serial(), Some("SN001".into()));
+        assert!(
+            s.scanner_is_online(),
+            "set_scanner_info must also record a ping"
+        );
+    }
+
+    #[test]
+    fn test_display_name_fallback_before_device_call() {
+        assert_eq!(make_state().scanner_display_name(), "—");
     }
 }
