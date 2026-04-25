@@ -80,15 +80,18 @@ pub async fn jobs_create(State(state): State<AppState>, Form(form): Form<JobForm
         Ok(j) => j,
         Err(e) => return render(form_to_tpl(false, 0, &form, Some(e))),
     };
-    let mut jobs = lock!(state.jobs);
-    let id = jobs.len();
-    let mut info = new_job.job_info.clone();
-    info["job_id"] = serde_json::json!(id);
-    jobs.push(Job {
-        job_info: info,
-        ..new_job
-    });
-    state.persist_config(&jobs);
+    let snapshot = {
+        let mut jobs = lock!(state.jobs);
+        let id = jobs.len();
+        let mut info = new_job.job_info.clone();
+        info["job_id"] = serde_json::json!(id);
+        jobs.push(Job {
+            job_info: info,
+            ..new_job
+        });
+        jobs.clone()
+    }; // lock released before disk I/O
+    state.persist_config(&snapshot);
     Redirect::to("/jobs").into_response()
 }
 
@@ -125,30 +128,36 @@ pub async fn jobs_update(
         Ok(j) => j,
         Err(e) => return render(form_to_tpl(true, id, &form, Some(e))),
     };
-    let mut jobs = lock!(state.jobs);
-    if id >= jobs.len() {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let mut info = updated.job_info.clone();
-    info["job_id"] = serde_json::json!(id);
-    jobs[id] = Job {
-        job_info: info,
-        ..updated
-    };
-    state.persist_config(&jobs);
+    let snapshot = {
+        let mut jobs = lock!(state.jobs);
+        if id >= jobs.len() {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        let mut info = updated.job_info.clone();
+        info["job_id"] = serde_json::json!(id);
+        jobs[id] = Job {
+            job_info: info,
+            ..updated
+        };
+        jobs.clone()
+    }; // lock released before disk I/O
+    state.persist_config(&snapshot);
     Redirect::to("/jobs").into_response()
 }
 
 pub async fn jobs_delete(Path(id): Path<usize>, State(state): State<AppState>) -> Response {
-    let mut jobs = lock!(state.jobs);
-    if id >= jobs.len() {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    jobs.remove(id);
-    for (i, job) in jobs.iter_mut().enumerate() {
-        job.job_info["job_id"] = serde_json::json!(i);
-    }
-    state.persist_config(&jobs);
+    let snapshot = {
+        let mut jobs = lock!(state.jobs);
+        if id >= jobs.len() {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        jobs.remove(id);
+        for (i, job) in jobs.iter_mut().enumerate() {
+            job.job_info["job_id"] = serde_json::json!(i);
+        }
+        jobs.clone()
+    }; // lock released before disk I/O
+    state.persist_config(&snapshot);
     Redirect::to("/jobs").into_response()
 }
 

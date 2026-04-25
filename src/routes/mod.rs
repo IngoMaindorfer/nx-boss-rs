@@ -2,7 +2,7 @@ use crate::state::AppState;
 use axum::{
     Router,
     extract::{DefaultBodyLimit, Request},
-    http::{StatusCode, header},
+    http::{HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::Response,
     routing::{delete, get, post, put},
@@ -15,6 +15,8 @@ use tracing::Level;
 use ui::{dashboard, scanner_status};
 
 mod batch;
+#[cfg(test)]
+mod e2e_test;
 mod image;
 pub mod jobs;
 mod scanner;
@@ -51,8 +53,10 @@ async fn force_json(mut req: Request, next: Next) -> Response {
             }
         }
         _ => {
-            req.headers_mut()
-                .insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+            req.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
         }
     }
     next.run(req).await
