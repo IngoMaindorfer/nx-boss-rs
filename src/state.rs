@@ -80,4 +80,13 @@ impl AppState {
         *lock!(self.scanner_model) = Some(model);
         *lock!(self.scanner_serial) = Some(serial);
     }
+
+    pub fn persist_config(&self, jobs: &[Job]) {
+        let retention = lock!(self.retention).clone();
+        if let Some(ref path) = self.config_path
+            && let Err(e) = Config::save(jobs, &retention, path)
+        {
+            tracing::warn!(error = %e, "failed to save config");
+        }
+    }
 }

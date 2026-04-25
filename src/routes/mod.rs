@@ -7,16 +7,19 @@ use axum::{
     response::Response,
     routing::{delete, get, post, put},
 };
+use jobs::{jobs_create, jobs_delete, jobs_edit, jobs_list, jobs_new, jobs_update};
+use scans::{scans_detail, scans_file, scans_list};
+use settings::{settings_get, settings_post};
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::Level;
-use ui::{
-    dashboard, jobs_create, jobs_delete, jobs_edit, jobs_list, jobs_new, jobs_update,
-    scanner_status, scans_detail, scans_file, scans_list, settings_get, settings_post,
-};
+use ui::{dashboard, scanner_status};
 
 mod batch;
 mod image;
+pub mod jobs;
 mod scanner;
+pub mod scans;
+pub mod settings;
 pub mod ui;
 
 // Scanner sends requests without Content-Type: application/json.

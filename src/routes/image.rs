@@ -7,6 +7,7 @@ use axum::{
 use serde_json::{Value, json};
 use tracing::{info, warn};
 
+use crate::lock;
 use crate::state::AppState;
 
 struct ParsedImage {
@@ -97,7 +98,7 @@ pub async fn post_image(State(state): State<AppState>, multipart: Multipart) -> 
         }
     };
 
-    let mut batches = state.batches.lock().unwrap();
+    let mut batches = lock!(state.batches);
     let batch = match batches.get_mut(&batch_id) {
         Some(b) => b,
         None => {

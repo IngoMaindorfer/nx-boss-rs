@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use tracing::{debug, info, warn};
 
 use crate::batch::now_iso;
+use crate::lock;
 use crate::state::AppState;
 
 pub async fn heartbeat(State(state): State<AppState>) -> Json<Value> {
@@ -61,7 +62,7 @@ pub async fn get_authorization(Query(_q): Query<AuthQuery>) -> Json<Value> {
 }
 
 pub async fn post_authorization(State(state): State<AppState>) -> Json<Value> {
-    let jobs = state.jobs.lock().unwrap();
+    let jobs = lock!(state.jobs);
     let job_names: Vec<&str> = jobs
         .iter()
         .filter_map(|j| j.job_info["name"].as_str())
@@ -85,7 +86,7 @@ pub async fn scansetting(
     Query(q): Query<ScanSettingQuery>,
     State(state): State<AppState>,
 ) -> Response {
-    let jobs = state.jobs.lock().unwrap();
+    let jobs = lock!(state.jobs);
     let Some(job) = jobs.get(q.job_id) else {
         warn!(job_id = q.job_id, "scansetting: job_id out of range");
         return (

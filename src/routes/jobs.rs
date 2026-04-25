@@ -1,0 +1,386 @@
+use askama::Template;
+use axum::{
+    Form,
+    extract::{Path, State},
+    http::StatusCode,
+    response::{IntoResponse, Redirect, Response},
+};
+use serde::Deserialize;
+
+use super::ui::{JobRow, job_rows, render};
+use crate::config::{Job, MAX_JOB_NAME_LEN, MAX_PATH_LEN};
+use crate::lock;
+use crate::state::AppState;
+
+#[derive(Template)]
+#[template(path = "jobs_list.html")]
+struct JobsListTpl {
+    jobs: Vec<JobRow>,
+}
+
+#[derive(Template)]
+#[template(path = "jobs_form.html")]
+struct JobsFormTpl {
+    editing: bool,
+    job_id: usize,
+    name: String,
+    color: String,
+    output_path: String,
+    consume_path: String,
+    resolution: u32,
+    jpeg_quality: u8,
+    pixel_format: String,
+    source: String,
+    error: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct JobFormData {
+    pub name: String,
+    pub color: String,
+    pub output_path: String,
+    #[serde(default)]
+    pub consume_path: String,
+    pub resolution: u32,
+    pub jpeg_quality: u8,
+    pub pixel_format: String,
+    #[serde(default = "default_source")]
+    pub source: String,
+}
+
+fn default_source() -> String {
+    "feeder".to_string()
+}
+
+pub async fn jobs_list(State(state): State<AppState>) -> Response {
+    let jobs = lock!(state.jobs);
+    render(JobsListTpl {
+        jobs: job_rows(&jobs),
+    })
+}
+
+pub async fn jobs_new() -> Response {
+    render(JobsFormTpl {
+        editing: false,
+        job_id: 0,
+        name: String::new(),
+        color: "#4D4D4D".to_string(),
+        output_path: String::new(),
+        consume_path: String::new(),
+        resolution: 300,
+        jpeg_quality: 80,
+        pixel_format: "rgb24".to_string(),
+        source: "feeder".to_string(),
+        error: None,
+    })
+}
+
+pub async fn jobs_create(State(state): State<AppState>, Form(form): Form<JobFormData>) -> Response {
+    let new_job = match apply_job_form(&form) {
+        Ok(j) => j,
+        Err(e) => return render(form_to_tpl(false, 0, &form, Some(e))),
+    };
+    let mut jobs = lock!(state.jobs);
+    let id = jobs.len();
+    let mut info = new_job.job_info.clone();
+    info["job_id"] = serde_json::json!(id);
+    jobs.push(Job {
+        job_info: info,
+        ..new_job
+    });
+    state.persist_config(&jobs);
+    Redirect::to("/jobs").into_response()
+}
+
+pub async fn jobs_edit(Path(id): Path<usize>, State(state): State<AppState>) -> Response {
+    let jobs = lock!(state.jobs);
+    let Some(job) = jobs.get(id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    render(JobsFormTpl {
+        editing: true,
+        job_id: id,
+        name: job.name().to_string(),
+        color: job.color().to_string(),
+        output_path: job.output_path.to_string_lossy().to_string(),
+        consume_path: job
+            .consume_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        resolution: job.resolution(),
+        jpeg_quality: job.jpeg_quality(),
+        pixel_format: job.pixel_format().to_string(),
+        source: job.source().to_string(),
+        error: None,
+    })
+}
+
+pub async fn jobs_update(
+    Path(id): Path<usize>,
+    State(state): State<AppState>,
+    Form(form): Form<JobFormData>,
+) -> Response {
+    let updated = match apply_job_form(&form) {
+        Ok(j) => j,
+        Err(e) => return render(form_to_tpl(true, id, &form, Some(e))),
+    };
+    let mut jobs = lock!(state.jobs);
+    if id >= jobs.len() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let mut info = updated.job_info.clone();
+    info["job_id"] = serde_json::json!(id);
+    jobs[id] = Job {
+        job_info: info,
+        ..updated
+    };
+    state.persist_config(&jobs);
+    Redirect::to("/jobs").into_response()
+}
+
+pub async fn jobs_delete(Path(id): Path<usize>, State(state): State<AppState>) -> Response {
+    let mut jobs = lock!(state.jobs);
+    if id >= jobs.len() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    jobs.remove(id);
+    for (i, job) in jobs.iter_mut().enumerate() {
+        job.job_info["job_id"] = serde_json::json!(i);
+    }
+    state.persist_config(&jobs);
+    Redirect::to("/jobs").into_response()
+}
+
+fn apply_job_form(form: &JobFormData) -> Result<Job, String> {
+    if form.name.trim().is_empty() {
+        return Err("Name darf nicht leer sein".to_string());
+    }
+    if form.name.trim().len() > MAX_JOB_NAME_LEN {
+        return Err(format!("Name zu lang (max. {MAX_JOB_NAME_LEN} Zeichen)"));
+    }
+    if form.output_path.trim().len() > MAX_PATH_LEN {
+        return Err(format!("Ausgabepfad zu lang (max. {MAX_PATH_LEN} Zeichen)"));
+    }
+    crate::config::validate_hex_color(form.color.trim()).map_err(|e| e.to_string())?;
+    let yaml = job_form_to_yaml(form);
+    let parsed = crate::config::Config::parse(&yaml).map_err(|e| e.to_string())?;
+    parsed
+        .jobs
+        .into_iter()
+        .next()
+        .ok_or_else(|| "Ungültige Konfiguration".to_string())
+}
+
+fn job_form_to_yaml(form: &JobFormData) -> String {
+    use crate::config::{RawConfig, RawJob};
+    use indexmap::IndexMap;
+    use std::collections::HashMap;
+
+    let mut scan_settings = HashMap::new();
+    scan_settings.insert("source".to_string(), serde_json::json!(form.source.trim()));
+    let mut pf = HashMap::new();
+    pf.insert("resolution".to_string(), serde_json::json!(form.resolution));
+    pf.insert(
+        "jpegQuality".to_string(),
+        serde_json::json!(form.jpeg_quality),
+    );
+    pf.insert(
+        "pixelFormat".to_string(),
+        serde_json::json!(form.pixel_format),
+    );
+    scan_settings.insert("pixelFormats".to_string(), serde_json::json!(pf));
+
+    let raw_job = RawJob {
+        output_path: form.output_path.trim().to_string(),
+        consume_path: if form.consume_path.trim().is_empty() {
+            None
+        } else {
+            Some(form.consume_path.trim().to_string())
+        },
+        color: Some(form.color.clone()),
+        job_settings: None,
+        scan_settings: Some(scan_settings),
+    };
+    let mut jobs = IndexMap::new();
+    jobs.insert(form.name.trim().to_string(), raw_job);
+    serde_yaml::to_string(&RawConfig {
+        jobs,
+        retention: Default::default(),
+    })
+    .unwrap_or_default()
+}
+
+fn form_to_tpl(
+    editing: bool,
+    job_id: usize,
+    form: &JobFormData,
+    error: Option<String>,
+) -> JobsFormTpl {
+    JobsFormTpl {
+        editing,
+        job_id,
+        error,
+        name: form.name.clone(),
+        color: form.color.clone(),
+        output_path: form.output_path.clone(),
+        consume_path: form.consume_path.clone(),
+        resolution: form.resolution,
+        jpeg_quality: form.jpeg_quality,
+        pixel_format: form.pixel_format.clone(),
+        source: form.source.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum_test::TestServer;
+    use serde_json::json;
+
+    use crate::config::{Config, Job};
+    use crate::routes::router;
+    use crate::state::AppState;
+
+    fn test_server() -> (TestServer, tempfile::TempDir) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = Config {
+            jobs: vec![Job {
+                output_path: tmp.path().to_path_buf(),
+                consume_path: None,
+                job_info: json!({
+                    "name": "TestJob", "job_id": 0, "color": "#4D4D4D",
+                    "type": 0, "job_setting": {}, "hierarchy_list": null
+                }),
+                scan_settings: json!({}),
+            }],
+            retention: Default::default(),
+        };
+        (TestServer::new(router(AppState::new(config))), tmp)
+    }
+
+    #[tokio::test]
+    async fn test_jobs_list_returns_200() {
+        let (server, _tmp) = test_server();
+        assert_eq!(server.get("/jobs").await.status_code(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_jobs_list_shows_job_name() {
+        let (server, _tmp) = test_server();
+        assert!(server.get("/jobs").await.text().contains("TestJob"));
+    }
+
+    #[tokio::test]
+    async fn test_jobs_new_form_returns_200() {
+        let (server, _tmp) = test_server();
+        assert_eq!(server.get("/jobs/new").await.status_code(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_jobs_edit_form_returns_200() {
+        let (server, _tmp) = test_server();
+        assert_eq!(server.get("/jobs/0/edit").await.status_code(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_jobs_edit_form_prefills_name() {
+        let (server, _tmp) = test_server();
+        assert!(server.get("/jobs/0/edit").await.text().contains("TestJob"));
+    }
+
+    #[tokio::test]
+    async fn test_jobs_edit_unknown_returns_404() {
+        let (server, _tmp) = test_server();
+        assert_eq!(server.get("/jobs/99/edit").await.status_code(), 404);
+    }
+
+    #[tokio::test]
+    async fn test_jobs_create_redirects() {
+        let (server, tmp) = test_server();
+        let out = tmp.path().join("new");
+        std::fs::create_dir_all(&out).unwrap();
+        let resp = server
+            .post("/jobs")
+            .form(&[
+                ("name", "NewJob"),
+                ("output_path", out.to_str().unwrap()),
+                ("color", "#ff0000"),
+                ("resolution", "300"),
+                ("jpeg_quality", "80"),
+                ("pixel_format", "rgb24"),
+                ("consume_path", ""),
+            ])
+            .await;
+        assert_eq!(resp.status_code(), 303);
+    }
+
+    #[tokio::test]
+    async fn test_jobs_create_appears_in_list() {
+        let (server, tmp) = test_server();
+        let out = tmp.path().join("new2");
+        std::fs::create_dir_all(&out).unwrap();
+        server
+            .post("/jobs")
+            .form(&[
+                ("name", "CreatedJob"),
+                ("output_path", out.to_str().unwrap()),
+                ("color", "#00ff00"),
+                ("resolution", "600"),
+                ("jpeg_quality", "90"),
+                ("pixel_format", "gray8"),
+                ("consume_path", ""),
+            ])
+            .await;
+        assert!(server.get("/jobs").await.text().contains("CreatedJob"));
+    }
+
+    #[tokio::test]
+    async fn test_jobs_update_redirects() {
+        let (server, tmp) = test_server();
+        let resp = server
+            .post("/jobs/0")
+            .form(&[
+                ("name", "UpdatedJob"),
+                ("output_path", tmp.path().to_str().unwrap()),
+                ("color", "#0000ff"),
+                ("resolution", "600"),
+                ("jpeg_quality", "95"),
+                ("pixel_format", "gray8"),
+                ("consume_path", ""),
+            ])
+            .await;
+        assert_eq!(resp.status_code(), 303);
+    }
+
+    #[tokio::test]
+    async fn test_jobs_update_reflected_in_list() {
+        let (server, tmp) = test_server();
+        server
+            .post("/jobs/0")
+            .form(&[
+                ("name", "RenamedJob"),
+                ("output_path", tmp.path().to_str().unwrap()),
+                ("color", "#0000ff"),
+                ("resolution", "300"),
+                ("jpeg_quality", "80"),
+                ("pixel_format", "rgb24"),
+                ("consume_path", ""),
+            ])
+            .await;
+        assert!(server.get("/jobs").await.text().contains("RenamedJob"));
+    }
+
+    #[tokio::test]
+    async fn test_jobs_delete_redirects() {
+        let (server, _tmp) = test_server();
+        let resp = server.delete("/jobs/0").await;
+        assert_eq!(resp.status_code(), 303);
+    }
+
+    #[tokio::test]
+    async fn test_jobs_delete_removes_from_list() {
+        let (server, _tmp) = test_server();
+        server.delete("/jobs/0").await;
+        assert!(!server.get("/jobs").await.text().contains("TestJob"));
+    }
+}
