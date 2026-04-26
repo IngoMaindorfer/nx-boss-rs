@@ -197,17 +197,35 @@ mod tests {
 
     /// Build a minimal but structurally valid JPEG for unit tests.
     fn make_test_jpeg(width: u16, height: u16, dpi: u16) -> Vec<u8> {
+        make_test_jpeg_units(width, height, dpi, 1)
+    }
+
+    /// Like make_test_jpeg but with a configurable JFIF density units field.
+    /// units: 0 = aspect ratio only, 1 = DPI, 2 = dots/cm
+    fn make_test_jpeg_units(width: u16, height: u16, density: u16, units: u8) -> Vec<u8> {
         let mut v = vec![
             0xFF, 0xD8, // SOI
             // APP0 (JFIF), length=16
             0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, // "JFIF\0"
             0x01, 0x01, // version 1.1
-            0x01, // units = DPI
+            units,
         ];
-        v.extend_from_slice(&dpi.to_be_bytes()); // Xdensity
-        v.extend_from_slice(&dpi.to_be_bytes()); // Ydensity
+        v.extend_from_slice(&density.to_be_bytes()); // Xdensity
+        v.extend_from_slice(&density.to_be_bytes()); // Ydensity
         v.extend_from_slice(&[0x00, 0x00]); // no thumbnail
-        // SOF0, length=11 (1 component = grayscale)
+        // SOF0, length=11 (1 component = grayscale): precision, height, width, components
+        v.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x0B, 0x08]);
+        v.extend_from_slice(&height.to_be_bytes());
+        v.extend_from_slice(&width.to_be_bytes());
+        v.extend_from_slice(&[0x01, 0x01, 0x11, 0x00]); // 1 component
+        v.extend_from_slice(&[0xFF, 0xD9]); // EOI
+        v
+    }
+
+    /// JPEG with no APP0 marker — just SOI + SOF0 + EOI.
+    fn make_jpeg_no_jfif(width: u16, height: u16) -> Vec<u8> {
+        let mut v = vec![0xFF, 0xD8]; // SOI
+        // SOF0, length=11
         v.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x0B, 0x08]);
         v.extend_from_slice(&height.to_be_bytes());
         v.extend_from_slice(&width.to_be_bytes());
@@ -294,5 +312,48 @@ mod tests {
             (height_pt - 75.75).abs() < 2.0,
             "page height should be ~75.75pt, got {height_pt}"
         );
+    }
+
+    #[test]
+    fn test_parse_jpeg_dpi_units_cm() {
+        // units=2 means dots/cm; 38 dots/cm * 2.54 ≈ 96.52 DPI
+        let jpeg = make_test_jpeg_units(100, 100, 38, 2);
+        let info = parse_jpeg(&jpeg).unwrap();
+        let expected = 38.0 * 2.54;
+        assert!(
+            (info.dpi - expected).abs() < 0.01,
+            "expected ~{expected} DPI, got {}",
+            info.dpi
+        );
+    }
+
+    #[test]
+    fn test_parse_jpeg_dpi_units_zero_keeps_default() {
+        // units=0 means pixel aspect ratio only — density value has no physical meaning.
+        // parse_jpeg must leave DPI at the 300 default.
+        let jpeg = make_test_jpeg_units(100, 100, 72, 0);
+        let info = parse_jpeg(&jpeg).unwrap();
+        assert_eq!(info.dpi, 300.0, "units=0 must not change the DPI default");
+    }
+
+    #[test]
+    fn test_parse_jpeg_no_jfif_defaults_to_300_dpi() {
+        // A JPEG without any APP0/JFIF marker has no embedded DPI.
+        // parse_jpeg must default to 300 DPI so assemble_pdf still produces valid output.
+        let jpeg = make_jpeg_no_jfif(200, 150);
+        let info = parse_jpeg(&jpeg).unwrap();
+        assert_eq!(info.dpi, 300.0, "missing JFIF must default to 300 DPI");
+        assert_eq!(info.width, 200);
+        assert_eq!(info.height, 150);
+    }
+
+    #[test]
+    fn test_assemble_pdf_no_jfif_jpeg_succeeds() {
+        // assemble_pdf must not fail on a JPEG without a JFIF APP0 marker.
+        let jpeg = make_jpeg_no_jfif(400, 600);
+        let pdf = assemble_pdf(&[jpeg]).expect("assemble must succeed without JFIF");
+        assert!(pdf.starts_with(b"%PDF-1.5"));
+        let doc = lopdf::Document::load_mem(&pdf).expect("PDF must be lopdf-parseable");
+        assert_eq!(doc.get_pages().len(), 1);
     }
 }

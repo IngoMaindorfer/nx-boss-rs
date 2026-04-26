@@ -32,9 +32,10 @@ pub async fn run_forever(
             continue;
         }
         // run_once does heavy fs work (dir scan, zstd compression) — run off the async thread.
-        tokio::task::spawn_blocking(move || run_once(&jobs_snap, &cfg))
-            .await
-            .expect("retention spawn_blocking panicked");
+        // Log panics and continue; losing one sweep must not kill the background task.
+        if let Err(e) = tokio::task::spawn_blocking(move || run_once(&jobs_snap, &cfg)).await {
+            tracing::error!(error = %e, "retention: run_once panicked — skipping sweep");
+        }
     }
 }
 

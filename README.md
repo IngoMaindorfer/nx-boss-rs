@@ -80,6 +80,7 @@ All scan parameters (resolution, color mode, source) come from the job's `scan_s
 ┌─────────────────────────────────────────────────────────────┐
 │                       routes/mod.rs                         │
 │  force_json middleware  (normalises Content-Type)           │
+│  csrf_check middleware  (HX-Request: true for UI mutations) │
 │  DefaultBodyLimit       (100 MB, covers large multi-page)   │
 │  TraceLayer             (structured request logs)           │
 │                                                             │
@@ -91,11 +92,10 @@ All scan parameters (resolution, color mode, source) come from the job's `scan_s
                ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                        state.rs                             │
-│  jobs:          Vec<Job>                 (CRUD, persisted)  │
-│  batches:       HashMap<String, Batch>   (in-flight scans)  │
-│  last_ping:     Option<DateTime>         (online detection) │
-│  scanner_*:     name / model / serial                       │
-│  retention:     RetentionConfig                             │
+│  scanner:   ScannerState  (online detection, model/serial)  │
+│  jobs:      JobStore      (Arc<Mutex<Vec<Job>>>)            │
+│  batches:   BatchStore    (Arc<Mutex<HashMap<…, Batch>>>)   │
+│  retention: RetentionConfig                                 │
 │                                                             │
 │  lock!() macro: recovers poisoned Mutex instead of panic    │
 └──────────────┬──────────────────────────────────────────────┘
@@ -125,7 +125,13 @@ All scan parameters (resolution, color mode, source) come from the job's `scan_s
 
 **Mutex poison recovery.** The `lock!()` macro recovers a poisoned `Mutex` (caused by a panic in another handler) instead of propagating the panic. A single handler crash cannot take down the whole server.
 
-**Lock-before-IO discipline.** Every mutable operation follows: acquire lock → mutate + clone snapshot → release lock → do I/O. Disk writes never happen while a Mutex is held.
+**Non-blocking I/O discipline.** All filesystem work (`Batch::create`, `add_file`, `complete`, PDF assembly, retention sweeps) runs in `tokio::task::spawn_blocking` so the async executor threads are never stalled on disk. MutexGuards are always scoped to drop before any `await` point to satisfy axum's `Handler: Send` bound.
+
+**CSRF protection.** UI mutation routes (`POST/PUT/DELETE` outside `/NmWebService/*`) require an `HX-Request: true` header. CORS prevents cross-origin requests from setting custom headers, so this blocks CSRF without tokens. Scanner routes are exempt because they are driven by firmware, not a browser.
+
+**Lock-before-IO discipline.** Every mutable operation follows: acquire lock → clone snapshot → release lock → do I/O. Disk writes never happen while a Mutex is held.
+
+**AppState SRP.** `AppState` composes three typed stores (`ScannerState`, `JobStore`, `BatchStore`) instead of bare fields. Each store owns its own `Arc<Mutex<…>>` and exposes a typed API; call sites use the same `lock!()` macro unchanged via `Deref`.
 
 **UUID v6.** Batch IDs are UUID v6 (time-sortable), so scan batches appear in chronological order without sorting.
 
@@ -139,12 +145,12 @@ All scan parameters (resolution, color mode, source) come from the job's `scan_s
 src/
 ├── main.rs            CLI entry point, graceful shutdown, retention task spawn
 ├── config.rs          Config + Job parsing, YAML serialisation, hex-color validation
-├── state.rs           AppState, lock!() macro, scanner-online detection
+├── state.rs           AppState, ScannerState, JobStore, BatchStore, lock!() macro
 ├── batch.rs           Batch lifecycle: create / add_file / complete, metadata.json
 ├── pdf.rs             Lossless JPEG→PDF assembly (DCTDecode, no re-encode)
 ├── retention.rs       Background sweep: stale in-memory batches, archive, delete
 └── routes/
-    ├── mod.rs         Router, force_json + body-limit + trace middleware
+    ├── mod.rs         Router, force_json + csrf_check + body-limit + trace middleware
     ├── scanner.rs     NmWebService: heartbeat, device, authorization, scansetting
     ├── batch.rs       POST /NmWebService/batch, PUT /NmWebService/batch/{id}
     ├── image.rs       POST /NmWebService/image (multipart)
@@ -153,6 +159,10 @@ src/
     ├── scans.rs       Web UI: scan list, detail page, file download
     ├── settings.rs    Web UI: retention settings
     └── e2e_test.rs    End-to-end test: full scanner session in-process
+
+tests/
+└── fixtures/
+    └── scan_page.jpg  Public-domain JPEG fixture (Declaration of Independence excerpt, CC0)
 
 templates/             Askama (Jinja2-like, compiled at build time) HTML templates
 scripts/
@@ -176,7 +186,7 @@ cp config.example.yaml config.yaml
 
 cargo run -- --config config.yaml
 
-# Tests (includes full end-to-end scanner session)
+# Tests (94 total — unit, integration, and full end-to-end scanner session)
 cargo test
 
 # Lint
