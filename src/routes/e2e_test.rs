@@ -1,8 +1,10 @@
 /// End-to-end test for the complete scanner session protocol:
 /// heartbeat → device → GET auth → POST auth → scansetting →
-/// POST batch → POST image → PUT batch → UI verification
+/// POST batch → POST image (real JPEG) → PUT batch → PDF delivery → UI verification
 ///
 /// Mirrors the flow from scripts/rev.py, but runs in-process via axum_test.
+/// The fixture is a public-domain excerpt from the U.S. Declaration of Independence
+/// (Wikimedia Commons, CC0 / U.S. government work).
 #[cfg(test)]
 mod tests {
     use axum_test::TestServer;
@@ -12,12 +14,17 @@ mod tests {
     use crate::routes::router;
     use crate::state::AppState;
 
+    // Real JPEG embedded at compile time — validates the full encode/decode path.
+    const SCAN_PAGE: &[u8] = include_bytes!("../../tests/fixtures/scan_page.jpg");
+
     fn test_server() -> (TestServer, tempfile::TempDir) {
         let tmp = tempfile::TempDir::new().unwrap();
+        let consume = tmp.path().join("consume");
+        std::fs::create_dir_all(&consume).unwrap();
         let config = Config {
             jobs: vec![Job {
                 output_path: tmp.path().to_path_buf(),
-                consume_path: None,
+                consume_path: Some(consume),
                 job_info: json!({
                     "name": "E2EJob", "job_id": 0, "color": "#4D4D4D",
                     "type": 0, "job_setting": {}, "hierarchy_list": null
@@ -130,14 +137,11 @@ mod tests {
             .unwrap()
             .to_string();
 
-        // 7. POST image — upload two pages
-        for (i, page) in [b"\xff\xd8\xff\xd9".as_ref(), b"\xff\xd8\xff\xe0".as_ref()]
-            .iter()
-            .enumerate()
-        {
+        // 7. POST image — upload two pages using a real public-domain JPEG
+        for i in 0..2usize {
             let boundary = format!("boundary{i}");
             let param = json!({ "batch_id": batch_id }).to_string();
-            let body = multipart_body(&boundary, page, &format!("page{i}.jpg"), &param);
+            let body = multipart_body(&boundary, SCAN_PAGE, &format!("page{i}.jpg"), &param);
             let resp = server
                 .post("/NmWebService/image")
                 .content_type(&format!("multipart/form-data; boundary={boundary}"))
@@ -146,11 +150,17 @@ mod tests {
             assert_eq!(resp.status_code(), 200, "image upload {i} failed");
         }
 
-        // Files must exist on disk
-        assert!(tmp.path().join(&batch_id).join("page0.jpg").exists());
-        assert!(tmp.path().join(&batch_id).join("page1.jpg").exists());
+        // Files must exist on disk with the correct JPEG magic bytes
+        for i in 0..2usize {
+            let bytes = std::fs::read(tmp.path().join(&batch_id).join(format!("page{i}.jpg")))
+                .unwrap_or_default();
+            assert!(
+                bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
+                "page{i}.jpg is not a valid JPEG"
+            );
+        }
 
-        // 8. PUT batch — scanner signals end of document
+        // 8. PUT batch — scanner signals end of document; triggers PDF delivery
         let resp = server.put(&format!("/NmWebService/batch/{batch_id}")).await;
         assert_eq!(resp.status_code(), 200);
 
@@ -174,6 +184,35 @@ mod tests {
         assert_eq!(meta["completed"], true);
         assert_eq!(meta["files"].as_array().unwrap().len(), 2);
         assert_eq!(meta["scanner"]["serial"], "E2E001");
+
+        // PDF + JSON sidecar must have been delivered to the consume folder
+        let consume = tmp.path().join("consume");
+        let pdf_files: Vec<_> = std::fs::read_dir(&consume)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("pdf"))
+            .collect();
+        assert_eq!(
+            pdf_files.len(),
+            1,
+            "exactly one PDF must be in the consume folder"
+        );
+        let pdf_path = pdf_files[0].path();
+        let pdf_bytes = std::fs::read(&pdf_path).unwrap();
+        assert!(
+            pdf_bytes.starts_with(b"%PDF"),
+            "delivered file must be a valid PDF"
+        );
+
+        let sidecar_path = pdf_path.with_extension("json");
+        assert!(
+            sidecar_path.exists(),
+            "JSON sidecar must exist alongside PDF"
+        );
+        let sidecar: Value =
+            serde_json::from_str(&std::fs::read_to_string(&sidecar_path).unwrap()).unwrap();
+        assert_eq!(sidecar["custom_fields"]["pages"], 2);
+        assert_eq!(sidecar["tags"][1], "e2ejob");
 
         // 9. DELETE accesstoken — scanner logout
         assert_eq!(
