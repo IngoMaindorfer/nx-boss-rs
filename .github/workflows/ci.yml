@@ -37,6 +37,56 @@ jobs:
       - name: cargo test
         run: cargo test
 
+  integration-test:
+    name: Integration test (binary)
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Create test config and scan dir
+        run: |
+          mkdir -p /tmp/nx-boss-scans
+          cat > /tmp/nx-boss-test.yaml << 'EOF'
+          jobs:
+            Integration:
+              output_path: /tmp/nx-boss-scans
+              color: '#2196F3'
+          EOF
+
+      - name: Start server
+        run: |
+          ./target/release/nx-boss-rs --config /tmp/nx-boss-test.yaml &
+          echo $! > /tmp/nx-boss.pid
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:10447/NmWebService/heartbeat && break
+            sleep 1
+          done
+
+      - name: Run integration test
+        run: bash scripts/test_scan.sh 127.0.0.1:10447 /tmp/nx-boss-scans
+
+      - name: Stop server
+        if: always()
+        run: kill $(cat /tmp/nx-boss.pid) 2>/dev/null || true
+
   docker-build:
     name: Docker build (smoke test)
     runs-on: ubuntu-latest
