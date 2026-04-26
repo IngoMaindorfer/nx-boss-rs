@@ -245,7 +245,8 @@ pub fn validate_hex_color(color: &str) -> Result<()> {
 
 fn check_dir_writable(path: &Path) -> Result<()> {
     if !path.is_dir() {
-        bail!("{} is not a directory", path.display());
+        std::fs::create_dir_all(path)
+            .with_context(|| format!("cannot create directory {}", path.display()))?;
     }
     let probe = path.join(".nx_boss_write_probe");
     std::fs::write(&probe, b"").with_context(|| format!("{} is not writable", path.display()))?;
@@ -417,8 +418,19 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_output_path() {
-        let yaml = "jobs:\n  x:\n    output_path: /nonexistent/path/xyz\n";
+    fn test_output_path_created_if_missing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let new_dir = tmp.path().join("sub/dir");
+        assert!(!new_dir.exists());
+        let yaml = format!("jobs:\n  x:\n    output_path: {}\n", new_dir.display());
+        assert!(Config::parse(&yaml).is_ok(), "missing dir must be created");
+        assert!(new_dir.is_dir());
+    }
+
+    #[test]
+    fn test_invalid_output_path_not_creatable() {
+        // /proc/nx_boss_xyz cannot be created — permission denied
+        let yaml = "jobs:\n  x:\n    output_path: /proc/nx_boss_xyz\n";
         assert!(Config::parse(yaml).is_err());
     }
 

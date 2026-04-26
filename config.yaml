@@ -1,6 +1,6 @@
 jobs:
   TestJob:
-    output_path: /home/ingo/nx-boss/scans
+    output_path: /data
     color: '#a51d2d'
     scan_settings:
       pixelFormats:

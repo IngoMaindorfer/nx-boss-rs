@@ -1,3 +1,4 @@
+target/
 .venv/
 .pre-commit-config.yaml
 tests/
