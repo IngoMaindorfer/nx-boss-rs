@@ -4,7 +4,7 @@ use axum::{
     extract::{DefaultBodyLimit, Request},
     http::{HeaderValue, StatusCode, header},
     middleware::{self, Next},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
 use jobs::{jobs_create, jobs_delete, jobs_edit, jobs_list, jobs_new, jobs_update};
@@ -62,6 +62,26 @@ async fn force_json(mut req: Request, next: Next) -> Response {
     next.run(req).await
 }
 
+// Custom headers (like HX-Request) cannot be sent cross-origin without a CORS preflight
+// that the server must explicitly allow. Requiring this header for all UI mutations
+// blocks cross-site form submissions without a per-request token.
+async fn csrf_check(req: Request, next: Next) -> Response {
+    let is_mutation = matches!(req.method().as_str(), "POST" | "PUT" | "PATCH" | "DELETE");
+    let is_scanner = req.uri().path().starts_with("/NmWebService/");
+
+    if is_mutation && !is_scanner {
+        let hx = req
+            .headers()
+            .get("hx-request")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if !hx.eq_ignore_ascii_case("true") {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    }
+    next.run(req).await
+}
+
 async fn health() -> StatusCode {
     StatusCode::OK
 }
@@ -107,6 +127,7 @@ pub fn router(state: AppState) -> Router {
             delete(scanner::delete_accesstoken),
         )
         .layer(middleware::from_fn(force_json))
+        .layer(middleware::from_fn(csrf_check))
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100 MB
         .layer(trace_layer)
         .with_state(state)
@@ -168,6 +189,7 @@ mod tests {
         std::fs::create_dir_all(&out).unwrap();
         let resp = server
             .post("/jobs")
+            .add_header("HX-Request", "true")
             .form(&[
                 ("name", "FormJob"),
                 ("output_path", out.to_str().unwrap()),
@@ -180,5 +202,46 @@ mod tests {
             .await;
         // Redirect means form was parsed correctly
         assert_eq!(resp.status_code(), 303);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_ui_mutation_without_hx_request_is_forbidden() {
+        // POST to UI route without HX-Request header must be rejected with 403.
+        // This prevents cross-site form submissions — custom headers are blocked by CORS.
+        let (server, _tmp) = test_server();
+        let resp = server
+            .post("/settings")
+            .form(&[("archive_after_days", "7"), ("delete_after_days", "30")])
+            .await;
+        assert_eq!(resp.status_code(), 403);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_ui_mutation_with_hx_request_is_allowed() {
+        let (server, _tmp) = test_server();
+        let resp = server
+            .post("/settings")
+            .add_header("HX-Request", "true")
+            .form(&[("archive_after_days", "7"), ("delete_after_days", "30")])
+            .await;
+        assert_ne!(resp.status_code(), 403);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_scanner_route_not_affected() {
+        // Scanner routes must work without HX-Request (scanner doesn't use HTMX).
+        let (server, _tmp) = test_server();
+        let resp = server
+            .post("/NmWebService/batch")
+            .bytes(br#"{"job_id":0}"#.as_ref().into())
+            .await;
+        assert_eq!(resp.status_code(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_csrf_get_request_not_affected() {
+        // CSRF guard must not block safe (idempotent) GET requests.
+        let (server, _tmp) = test_server();
+        assert_eq!(server.get("/settings").await.status_code(), 200);
     }
 }

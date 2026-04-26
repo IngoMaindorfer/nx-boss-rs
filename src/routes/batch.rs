@@ -39,26 +39,30 @@ pub async fn post_batch(
         }
     };
 
-    let jobs = lock!(state.jobs);
-    if job_id >= jobs.len() {
-        warn!(job_id, "post_batch: job_id out of range");
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({ "error": "job_id out of range" })),
-        )
-            .into_response();
-    }
-
-    let job = jobs[job_id].clone();
-    drop(jobs);
+    let job = {
+        let jobs = lock!(state.jobs);
+        if job_id >= jobs.len() {
+            warn!(job_id, "post_batch: job_id out of range");
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({ "error": "job_id out of range" })),
+            )
+                .into_response();
+        }
+        jobs[job_id].clone()
+    }; // lock released before I/O
     let scanner = ScannerInfo {
-        model: state.scanner_display_model(),
-        serial: state.scanner_display_serial(),
+        model: state.scanner.display_model(),
+        serial: state.scanner.display_serial(),
     };
-    match Batch::create(&job, scanner) {
+    let job_name = job.job_info["name"].as_str().unwrap_or("?").to_string();
+    // Batch::create does create_dir_all + file I/O — run off the async thread.
+    let result = tokio::task::spawn_blocking(move || Batch::create(&job, scanner))
+        .await
+        .expect("spawn_blocking panicked");
+    match result {
         Ok(batch) => {
             let id = batch.id.clone();
-            let job_name = job.job_info["name"].as_str().unwrap_or("?").to_string();
             info!(batch_id = %id, job_id, job_name, "batch created");
             lock!(state.batches).insert(id.clone(), batch);
             (StatusCode::OK, Json(json!({ "batch_id": id }))).into_response()
@@ -86,8 +90,14 @@ pub async fn put_batch(
             return StatusCode::NOT_FOUND.into_response();
         }
     };
-    // Lock is released here — complete() may do significant file I/O.
-    match batch.complete() {
+    // complete() does PDF assembly + file writes — run off the async thread.
+    let (batch, result) = tokio::task::spawn_blocking(move || {
+        let r = batch.complete();
+        (batch, r)
+    })
+    .await
+    .expect("spawn_blocking panicked");
+    match result {
         Ok(()) => {
             info!(batch_id = %batch_id, n_files = batch.metadata().files.len(), "batch completed");
             StatusCode::OK.into_response()

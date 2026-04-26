@@ -13,7 +13,7 @@ use crate::lock;
 use crate::state::AppState;
 
 pub async fn heartbeat(State(state): State<AppState>) -> Json<Value> {
-    state.record_ping();
+    state.scanner.record_ping();
     debug!("heartbeat");
     Json(json!({ "system_time": now_iso() }))
 }
@@ -42,7 +42,7 @@ pub async fn device(
         scanner_ip = %payload.scanner_ip,
         "scanner registered"
     );
-    state.set_scanner_info(
+    state.scanner.set_info(
         payload.scanner_name,
         payload.scanner_model,
         payload.serial_no,

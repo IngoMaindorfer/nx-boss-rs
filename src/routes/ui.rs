@@ -151,10 +151,10 @@ struct ScannerStatusTpl {
 // ---------------------------------------------------------------------------
 
 pub async fn dashboard(State(state): State<AppState>) -> Response {
-    let online = state.scanner_is_online();
-    let name = state.scanner_display_name();
-    let model = state.scanner_display_model();
-    let serial = state.scanner_display_serial();
+    let online = state.scanner.is_online();
+    let name = state.scanner.display_name();
+    let model = state.scanner.display_model();
+    let serial = state.scanner.display_serial();
     let jobs = lock!(state.jobs);
     let recent_scans = list_scans(&jobs, 10);
     let job_rows = job_rows(&jobs);
@@ -171,9 +171,9 @@ pub async fn dashboard(State(state): State<AppState>) -> Response {
 
 pub async fn scanner_status(State(state): State<AppState>) -> Response {
     render(ScannerStatusTpl {
-        online: state.scanner_is_online(),
-        name: state.scanner_display_name(),
-        model: state.scanner_display_model(),
+        online: state.scanner.is_online(),
+        name: state.scanner.display_name(),
+        model: state.scanner.display_model(),
         t: state.translations,
     })
 }

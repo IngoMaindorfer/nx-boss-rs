@@ -104,8 +104,8 @@ pub async fn post_image(State(state): State<AppState>, multipart: Multipart) -> 
         return bad_request("not a JPEG image");
     }
 
-    let mut batches = lock!(state.batches);
-    let batch = match batches.get_mut(&batch_id) {
+    // Remove batch before I/O so the lock is not held during file writes.
+    let batch = match lock!(state.batches).remove(&batch_id) {
         Some(b) => b,
         None => {
             warn!(batch_id = %batch_id, "post_image: unknown batch_id");
@@ -113,7 +113,22 @@ pub async fn post_image(State(state): State<AppState>, multipart: Multipart) -> 
         }
     };
 
-    match batch.add_file(&parsed.filename, &parsed.content, parsed.parameters) {
+    let filename = parsed.filename.clone();
+    let content = parsed.content.clone();
+    let parameters = parsed.parameters.clone();
+    // add_file does file I/O — run off the async thread.
+    let (batch, result) = tokio::task::spawn_blocking(move || {
+        let mut batch = batch;
+        let r = batch.add_file(&filename, &content, parameters);
+        (batch, r)
+    })
+    .await
+    .expect("spawn_blocking panicked");
+
+    // Always re-insert — even on error, so the scanner can retry the page.
+    lock!(state.batches).insert(batch_id.clone(), batch);
+
+    match result {
         Ok(()) => {
             info!(
                 batch_id = %batch_id,

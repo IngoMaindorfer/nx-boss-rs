@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -6,9 +5,10 @@ use std::time::Duration;
 use anyhow::Result;
 use tracing::{info, warn};
 
-use crate::batch::{Batch, BatchMetadata};
+use crate::batch::BatchMetadata;
 use crate::config::{Job, RetentionConfig};
 use crate::lock;
+use crate::state::{BatchStore, JobStore};
 
 const STARTUP_DELAY_SECS: u64 = 60;
 const SWEEP_INTERVAL_SECS: u64 = 3600;
@@ -16,9 +16,9 @@ const SWEEP_INTERVAL_SECS: u64 = 3600;
 const BATCH_TTL_HOURS: i64 = 24;
 
 pub async fn run_forever(
-    jobs: Arc<Mutex<Vec<Job>>>,
+    jobs: JobStore,
     retention: Arc<Mutex<RetentionConfig>>,
-    batches: Arc<Mutex<HashMap<String, Batch>>>,
+    batches: BatchStore,
 ) {
     let start = tokio::time::Instant::now() + Duration::from_secs(STARTUP_DELAY_SECS);
     let mut interval = tokio::time::interval_at(start, Duration::from_secs(SWEEP_INTERVAL_SECS));
@@ -31,11 +31,14 @@ pub async fn run_forever(
         if cfg.archive_after_days == 0 && cfg.delete_after_days == 0 {
             continue;
         }
-        run_once(&jobs_snap, &cfg);
+        // run_once does heavy fs work (dir scan, zstd compression) — run off the async thread.
+        tokio::task::spawn_blocking(move || run_once(&jobs_snap, &cfg))
+            .await
+            .expect("retention spawn_blocking panicked");
     }
 }
 
-fn sweep_stale_batches(batches: &Arc<Mutex<HashMap<String, Batch>>>) {
+fn sweep_stale_batches(batches: &BatchStore) {
     let now = chrono::Utc::now();
     let mut map = lock!(batches);
     let before = map.len();

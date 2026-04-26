@@ -103,6 +103,7 @@ mod tests {
         let (server, _tmp) = test_server();
         let resp = server
             .post("/settings")
+            .add_header("HX-Request", "true")
             .form(&[("archive_after_days", "7"), ("delete_after_days", "30")])
             .await;
         assert_eq!(resp.status_code(), 200);
@@ -114,6 +115,7 @@ mod tests {
         let (server, _tmp) = test_server();
         let resp = server
             .post("/settings")
+            .add_header("HX-Request", "true")
             .form(&[("archive_after_days", "30"), ("delete_after_days", "7")])
             .await;
         assert_eq!(resp.status_code(), 200);
@@ -125,6 +127,7 @@ mod tests {
         let (server, _tmp) = test_server();
         let resp = server
             .post("/settings")
+            .add_header("HX-Request", "true")
             .form(&[("archive_after_days", "0"), ("delete_after_days", "0")])
             .await;
         assert_eq!(resp.status_code(), 200);
@@ -136,6 +139,7 @@ mod tests {
         let (server, _tmp) = test_server();
         let resp = server
             .post("/settings")
+            .add_header("HX-Request", "true")
             .form(&[("archive_after_days", "7"), ("delete_after_days", "0")])
             .await;
         assert_eq!(resp.status_code(), 200);

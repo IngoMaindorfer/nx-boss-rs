@@ -333,6 +333,7 @@ mod tests {
         std::fs::create_dir_all(&out).unwrap();
         let resp = server
             .post("/jobs")
+            .add_header("HX-Request", "true")
             .form(&[
                 ("name", "NewJob"),
                 ("output_path", out.to_str().unwrap()),
@@ -353,6 +354,7 @@ mod tests {
         std::fs::create_dir_all(&out).unwrap();
         server
             .post("/jobs")
+            .add_header("HX-Request", "true")
             .form(&[
                 ("name", "CreatedJob"),
                 ("output_path", out.to_str().unwrap()),
@@ -371,6 +373,7 @@ mod tests {
         let (server, tmp) = test_server();
         let resp = server
             .post("/jobs/0")
+            .add_header("HX-Request", "true")
             .form(&[
                 ("name", "UpdatedJob"),
                 ("output_path", tmp.path().to_str().unwrap()),
@@ -389,6 +392,7 @@ mod tests {
         let (server, tmp) = test_server();
         server
             .post("/jobs/0")
+            .add_header("HX-Request", "true")
             .form(&[
                 ("name", "RenamedJob"),
                 ("output_path", tmp.path().to_str().unwrap()),
@@ -405,14 +409,20 @@ mod tests {
     #[tokio::test]
     async fn test_jobs_delete_redirects() {
         let (server, _tmp) = test_server();
-        let resp = server.delete("/jobs/0").await;
+        let resp = server
+            .delete("/jobs/0")
+            .add_header("HX-Request", "true")
+            .await;
         assert_eq!(resp.status_code(), 303);
     }
 
     #[tokio::test]
     async fn test_jobs_delete_removes_from_list() {
         let (server, _tmp) = test_server();
-        server.delete("/jobs/0").await;
+        server
+            .delete("/jobs/0")
+            .add_header("HX-Request", "true")
+            .await;
         assert!(!server.get("/jobs").await.text().contains("TestJob"));
     }
 }

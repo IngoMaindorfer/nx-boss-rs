@@ -21,7 +21,7 @@
     <strong>{{ t.settings_zero_disabled }}</strong>
   </p>
 
-  <form class="edit-form" method="post" action="/settings">
+  <form class="edit-form" hx-boost="true" method="post" action="/settings">
     <div class="field">
       <label for="archive_after_days">{{ t.settings_archive_label }}</label>
       <input id="archive_after_days" name="archive_after_days" type="number"

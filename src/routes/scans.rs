@@ -84,15 +84,19 @@ pub async fn scans_file(
     Path((batch_id, filename)): Path<(String, String)>,
     State(state): State<AppState>,
 ) -> Response {
-    let jobs = lock!(state.jobs);
-    let Some(dir) = find_batch_dir(&jobs, &batch_id) else {
-        return StatusCode::NOT_FOUND.into_response();
+    // Release the lock before the async read — MutexGuard is not Send.
+    let dir = {
+        let jobs = lock!(state.jobs);
+        match find_batch_dir(&jobs, &batch_id) {
+            Some(d) => d,
+            None => return StatusCode::NOT_FOUND.into_response(),
+        }
     };
     let file_path = dir.join(&filename);
     if !is_safe_path(&dir, &file_path) {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    match std::fs::read(&file_path) {
+    match tokio::fs::read(&file_path).await {
         Ok(bytes) => (
             [
                 ("content-type", "image/jpeg"),
