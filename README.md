@@ -167,7 +167,8 @@ tests/
 templates/             Askama (Jinja2-like, compiled at build time) HTML templates
 scripts/
 ├── rev.py             Fake-scanner client for protocol analysis (probe/dump/compare)
-└── probe_sides.py     Polls source/duplex changes on a real NX Manager
+├── probe_sides.py     Polls source/duplex changes on a real NX Manager
+└── test_scan.sh       Bash integration test against a running server (no scanner needed)
 defaults.yaml          Full NmWebService scansetting defaults (merged under job config)
 ```
 

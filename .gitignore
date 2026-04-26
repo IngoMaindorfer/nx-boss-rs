@@ -1,6 +1,9 @@
 # Rust
 /target
 
+# Local runtime config — use config.example.yaml as template
+config.yaml
+
 # Scan output and consume delivery — never commit user data
 scans/
 consume/
