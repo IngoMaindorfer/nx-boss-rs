@@ -254,4 +254,45 @@ mod tests {
     fn test_assemble_pdf_empty_fails() {
         assert!(assemble_pdf(&[]).is_err());
     }
+
+    #[test]
+    fn test_assemble_pdf_with_real_jpeg_fixture() {
+        // Uses the public-domain fixture JPEG (1291×101 px, 96 DPI) to exercise
+        // the full encode path: JPEG parsing → page-size calculation → lopdf embed.
+        let jpeg = include_bytes!("../tests/fixtures/scan_page.jpg").to_vec();
+        let pdf = assemble_pdf(&[jpeg.clone(), jpeg]).expect("PDF assembly must succeed");
+
+        assert!(pdf.starts_with(b"%PDF-1.5"));
+
+        // lopdf must parse the output and report 2 pages
+        let doc = lopdf::Document::load_mem(&pdf).expect("PDF must be lopdf-parseable");
+        let pages = doc.get_pages();
+        assert_eq!(pages.len(), 2, "assembled PDF must have 2 pages");
+
+        // MediaBox on page 1 must reflect the JPEG's pixel/DPI ratio:
+        // 1291px * 72pt/96dpi ≈ 967.5pt wide  /  101px * 72/96 ≈ 75.75pt tall
+        let page1_id = *pages.get(&1).unwrap();
+        let page1 = doc.get_object(page1_id).unwrap();
+        let dict = page1.as_dict().unwrap();
+        let media_box = dict.get(b"MediaBox").unwrap().as_array().unwrap();
+        let width_pt = match &media_box[2] {
+            lopdf::Object::Real(f) => *f as f64,
+            lopdf::Object::Integer(i) => *i as f64,
+            _ => panic!("unexpected MediaBox width type"),
+        };
+        let height_pt = match &media_box[3] {
+            lopdf::Object::Real(f) => *f as f64,
+            lopdf::Object::Integer(i) => *i as f64,
+            _ => panic!("unexpected MediaBox height type"),
+        };
+        // Allow ±2pt rounding tolerance
+        assert!(
+            (width_pt - 967.5).abs() < 2.0,
+            "page width should be ~967.5pt, got {width_pt}"
+        );
+        assert!(
+            (height_pt - 75.75).abs() < 2.0,
+            "page height should be ~75.75pt, got {height_pt}"
+        );
+    }
 }

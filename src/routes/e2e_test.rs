@@ -203,6 +203,10 @@ mod tests {
             pdf_bytes.starts_with(b"%PDF"),
             "delivered file must be a valid PDF"
         );
+        // lopdf must be able to parse the PDF and report 2 pages
+        let pdf_doc =
+            lopdf::Document::load_mem(&pdf_bytes).expect("PDF must be structurally valid");
+        assert_eq!(pdf_doc.get_pages().len(), 2, "PDF must contain 2 pages");
 
         let sidecar_path = pdf_path.with_extension("json");
         assert!(
