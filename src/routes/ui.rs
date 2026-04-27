@@ -280,4 +280,62 @@ mod tests {
         let body = server.get("/api/scanner-status").await.text();
         assert!(body.contains("online"));
     }
+
+    fn server_with_source(source: &str) -> (TestServer, tempfile::TempDir) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = Config {
+            jobs: vec![Job {
+                output_path: tmp.path().to_path_buf(),
+                consume_path: None,
+                job_info: serde_json::json!({
+                    "name": "SourceJob", "job_id": 0, "color": "#4D4D4D",
+                    "type": 0, "job_setting": {}, "hierarchy_list": null
+                }),
+                scan_settings: serde_json::json!({
+                    "parameters": {
+                        "task": {
+                            "actions": {
+                                "streams": {
+                                    "sources": { "source": source }
+                                }
+                            }
+                        }
+                    }
+                }),
+            }],
+            ..Default::default()
+        };
+        (TestServer::new(router(AppState::new(config))), tmp)
+    }
+
+    #[tokio::test]
+    async fn test_dashboard_feeder_shows_duplex() {
+        let (server, _tmp) = server_with_source("feeder");
+        let body = server.get("/").await.text();
+        assert!(
+            body.contains("Doppelseitig"),
+            "feeder must show Doppelseitig"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dashboard_feeder_front_shows_front_label() {
+        let (server, _tmp) = server_with_source("feederFront");
+        let body = server.get("/").await.text();
+        assert!(
+            body.contains("Einseitig (Vorderseite)"),
+            "feederFront must show Einseitig (Vorderseite), got: {}",
+            &body[body.find("SourceJob").unwrap_or(0)..][..200.min(body.len())]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dashboard_feeder_rear_shows_rear_label() {
+        let (server, _tmp) = server_with_source("feederRear");
+        let body = server.get("/").await.text();
+        assert!(
+            body.contains("Einseitig (R\u{fc}ckseite)"),
+            "feederRear must show Einseitig (Rückseite)"
+        );
+    }
 }
