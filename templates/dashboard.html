@@ -59,6 +59,7 @@
   {% if recent_scans.is_empty() %}
     <p class="empty">{{ t.no_scans }}</p>
   {% else %}
+  <div class="table-wrap">
   <table>
     <thead>
       <tr>
@@ -89,6 +90,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% endif %}
 </div>
 {% endblock %}

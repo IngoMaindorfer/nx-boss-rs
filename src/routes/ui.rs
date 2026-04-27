@@ -54,7 +54,11 @@ pub struct JobRow {
 
 pub fn list_scans(jobs: &[Job], limit: usize) -> Vec<ScanEntry> {
     let mut scans = Vec::new();
+    let mut seen_paths = std::collections::HashSet::new();
     for job in jobs {
+        if !seen_paths.insert(&job.output_path) {
+            continue;
+        }
         if let Ok(entries) = std::fs::read_dir(&job.output_path) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -205,6 +209,45 @@ mod tests {
             ..Default::default()
         };
         (TestServer::new(router(AppState::new(config))), tmp)
+    }
+
+    #[test]
+    fn test_list_scans_deduplicates_shared_output_path() {
+        use super::list_scans;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let make_job = |id: usize, name: &str| Job {
+            output_path: tmp.path().to_path_buf(),
+            consume_path: None,
+            job_info: serde_json::json!({
+                "name": name, "job_id": id, "color": "#4D4D4D",
+                "type": 0, "job_setting": {}, "hierarchy_list": null
+            }),
+            scan_settings: serde_json::json!({}),
+        };
+
+        // One batch directory shared by both jobs
+        let batch_dir = tmp.path().join("deadbeefdeadbeefdeadbeefdeadbeef");
+        std::fs::create_dir_all(&batch_dir).unwrap();
+        std::fs::write(
+            batch_dir.join("metadata.json"),
+            serde_json::to_string(&serde_json::json!({
+                "job_name": "Job1",
+                "created_at": "2026-04-27T19:57:39+00:00",
+                "completed": true,
+                "files": [],
+                "scanner": {},
+                "job_config": {
+                    "resolution": 300, "pixel_format": "rgb24",
+                    "jpeg_quality": 80, "source": "feeder"
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let jobs = vec![make_job(0, "Job1"), make_job(1, "Job2")];
+        let scans = list_scans(&jobs, 100);
+        assert_eq!(scans.len(), 1, "shared output_path must not produce duplicate entries");
     }
 
     #[tokio::test]

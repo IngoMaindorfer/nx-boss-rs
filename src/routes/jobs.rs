@@ -2,7 +2,7 @@ use askama::Template;
 use axum::{
     Form,
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Redirect, Response},
 };
 use serde::Deserialize;
@@ -59,6 +59,14 @@ fn default_source() -> String {
     DEFAULT_SOURCE.to_string()
 }
 
+fn done(headers: &HeaderMap, url: &'static str) -> Response {
+    if headers.contains_key("hx-request") {
+        (StatusCode::NO_CONTENT, [("HX-Redirect", url)]).into_response()
+    } else {
+        Redirect::to(url).into_response()
+    }
+}
+
 pub async fn jobs_list(State(state): State<AppState>) -> Response {
     let jobs = lock!(state.jobs);
     render(JobsListTpl {
@@ -84,7 +92,11 @@ pub async fn jobs_new(State(state): State<AppState>) -> Response {
     })
 }
 
-pub async fn jobs_create(State(state): State<AppState>, Form(form): Form<JobFormData>) -> Response {
+pub async fn jobs_create(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Form(form): Form<JobFormData>,
+) -> Response {
     let new_job = match apply_job_form(&form, state.translations) {
         Ok(j) => j,
         Err(e) => return render(form_to_tpl(false, 0, &form, Some(e), state.translations)),
@@ -101,7 +113,7 @@ pub async fn jobs_create(State(state): State<AppState>, Form(form): Form<JobForm
         jobs.clone()
     }; // lock released before disk I/O
     state.persist_config(&snapshot);
-    Redirect::to("/jobs").into_response()
+    done(&headers, "/jobs")
 }
 
 pub async fn jobs_edit(Path(id): Path<usize>, State(state): State<AppState>) -> Response {
@@ -131,6 +143,7 @@ pub async fn jobs_edit(Path(id): Path<usize>, State(state): State<AppState>) -> 
 
 pub async fn jobs_update(
     Path(id): Path<usize>,
+    headers: HeaderMap,
     State(state): State<AppState>,
     Form(form): Form<JobFormData>,
 ) -> Response {
@@ -152,10 +165,14 @@ pub async fn jobs_update(
         jobs.clone()
     }; // lock released before disk I/O
     state.persist_config(&snapshot);
-    Redirect::to("/jobs").into_response()
+    done(&headers, "/jobs")
 }
 
-pub async fn jobs_delete(Path(id): Path<usize>, State(state): State<AppState>) -> Response {
+pub async fn jobs_delete(
+    Path(id): Path<usize>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Response {
     let snapshot = {
         let mut jobs = lock!(state.jobs);
         if id >= jobs.len() {
@@ -168,7 +185,7 @@ pub async fn jobs_delete(Path(id): Path<usize>, State(state): State<AppState>) -
         jobs.clone()
     }; // lock released before disk I/O
     state.persist_config(&snapshot);
-    Redirect::to("/jobs").into_response()
+    done(&headers, "/jobs")
 }
 
 fn apply_job_form(form: &JobFormData, t: &'static Translations) -> Result<Job, String> {
@@ -327,6 +344,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_jobs_update_htmx_returns_hx_redirect_not_303() {
+        // htmx follows 303 and swaps the full page HTML into the <form> → double navigation.
+        // With HX-Request present the server must return HX-Redirect so htmx does a real navigation.
+        let (server, tmp) = test_server();
+        let resp = server
+            .post("/jobs/0")
+            .add_header("HX-Request", "true")
+            .form(&[
+                ("name", "UpdatedJob"),
+                ("output_path", tmp.path().to_str().unwrap()),
+                ("color", "#0000ff"),
+                ("resolution", "300"),
+                ("jpeg_quality", "80"),
+                ("pixel_format", "rgb24"),
+                ("consume_path", ""),
+            ])
+            .await;
+        assert_eq!(resp.status_code(), 204);
+        assert_eq!(
+            resp.headers().get("HX-Redirect").and_then(|v| v.to_str().ok()),
+            Some("/jobs")
+        );
+    }
+
+    #[tokio::test]
     async fn test_jobs_create_redirects() {
         let (server, tmp) = test_server();
         let out = tmp.path().join("new");
@@ -344,7 +386,11 @@ mod tests {
                 ("consume_path", ""),
             ])
             .await;
-        assert_eq!(resp.status_code(), 303);
+        assert_eq!(resp.status_code(), 204);
+        assert_eq!(
+            resp.headers().get("HX-Redirect").and_then(|v| v.to_str().ok()),
+            Some("/jobs")
+        );
     }
 
     #[tokio::test]
@@ -384,7 +430,11 @@ mod tests {
                 ("consume_path", ""),
             ])
             .await;
-        assert_eq!(resp.status_code(), 303);
+        assert_eq!(resp.status_code(), 204);
+        assert_eq!(
+            resp.headers().get("HX-Redirect").and_then(|v| v.to_str().ok()),
+            Some("/jobs")
+        );
     }
 
     #[tokio::test]
@@ -413,7 +463,11 @@ mod tests {
             .delete("/jobs/0")
             .add_header("HX-Request", "true")
             .await;
-        assert_eq!(resp.status_code(), 303);
+        assert_eq!(resp.status_code(), 204);
+        assert_eq!(
+            resp.headers().get("HX-Redirect").and_then(|v| v.to_str().ok()),
+            Some("/jobs")
+        );
     }
 
     #[tokio::test]

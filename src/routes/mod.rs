@@ -200,8 +200,8 @@ mod tests {
                 ("consume_path", ""),
             ])
             .await;
-        // Redirect means form was parsed correctly
-        assert_eq!(resp.status_code(), 303);
+        // HX-Redirect means form was parsed correctly (htmx path returns 204 + HX-Redirect)
+        assert_eq!(resp.status_code(), 204);
     }
 
     #[tokio::test]
