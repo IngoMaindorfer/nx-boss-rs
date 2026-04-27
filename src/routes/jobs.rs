@@ -363,7 +363,9 @@ mod tests {
             .await;
         assert_eq!(resp.status_code(), 204);
         assert_eq!(
-            resp.headers().get("HX-Redirect").and_then(|v| v.to_str().ok()),
+            resp.headers()
+                .get("HX-Redirect")
+                .and_then(|v| v.to_str().ok()),
             Some("/jobs")
         );
     }
@@ -388,7 +390,9 @@ mod tests {
             .await;
         assert_eq!(resp.status_code(), 204);
         assert_eq!(
-            resp.headers().get("HX-Redirect").and_then(|v| v.to_str().ok()),
+            resp.headers()
+                .get("HX-Redirect")
+                .and_then(|v| v.to_str().ok()),
             Some("/jobs")
         );
     }
@@ -432,7 +436,9 @@ mod tests {
             .await;
         assert_eq!(resp.status_code(), 204);
         assert_eq!(
-            resp.headers().get("HX-Redirect").and_then(|v| v.to_str().ok()),
+            resp.headers()
+                .get("HX-Redirect")
+                .and_then(|v| v.to_str().ok()),
             Some("/jobs")
         );
     }
@@ -465,7 +471,9 @@ mod tests {
             .await;
         assert_eq!(resp.status_code(), 204);
         assert_eq!(
-            resp.headers().get("HX-Redirect").and_then(|v| v.to_str().ok()),
+            resp.headers()
+                .get("HX-Redirect")
+                .and_then(|v| v.to_str().ok()),
             Some("/jobs")
         );
     }

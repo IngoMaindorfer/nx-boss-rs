@@ -247,7 +247,11 @@ mod tests {
 
         let jobs = vec![make_job(0, "Job1"), make_job(1, "Job2")];
         let scans = list_scans(&jobs, 100);
-        assert_eq!(scans.len(), 1, "shared output_path must not produce duplicate entries");
+        assert_eq!(
+            scans.len(),
+            1,
+            "shared output_path must not produce duplicate entries"
+        );
     }
 
     #[tokio::test]
