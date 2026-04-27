@@ -513,4 +513,89 @@ mod tests {
             .await;
         assert!(!server.get("/jobs").await.text().contains("TestJob"));
     }
+
+    /// Jobs created/updated/deleted must be written to the config file on disk
+    /// so they survive a container restart. This requires config_path to be set
+    /// (with_config_path) and the file to be writable (not :ro mounted).
+    fn test_server_persistent() -> (TestServer, tempfile::TempDir) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config_file = tmp.path().join("config.yaml");
+        std::fs::write(&config_file, "jobs: {}\n").unwrap();
+        let config = Config {
+            jobs: vec![Job {
+                output_path: tmp.path().to_path_buf(),
+                consume_path: None,
+                job_info: json!({
+                    "name": "TestJob", "job_id": 0, "color": "#4D4D4D",
+                    "type": 0, "job_setting": {}, "hierarchy_list": null
+                }),
+                scan_settings: json!({}),
+            }],
+            ..Default::default()
+        };
+        let state = crate::state::AppState::new(config).with_config_path(config_file);
+        (TestServer::new(router(state)), tmp)
+    }
+
+    #[tokio::test]
+    async fn test_jobs_create_persists_to_config_file() {
+        let (server, tmp) = test_server_persistent();
+        let out = tmp.path().join("newjob");
+        std::fs::create_dir_all(&out).unwrap();
+        server
+            .post("/jobs")
+            .add_header("HX-Request", "true")
+            .form(&[
+                ("name", "PersistedJob"),
+                ("output_path", out.to_str().unwrap()),
+                ("color", "#ff0000"),
+                ("resolution", "300"),
+                ("jpeg_quality", "80"),
+                ("pixel_format", "rgb24"),
+                ("consume_path", ""),
+            ])
+            .await;
+        let on_disk = std::fs::read_to_string(tmp.path().join("config.yaml")).unwrap();
+        assert!(
+            on_disk.contains("PersistedJob"),
+            "created job must be written to config file; got: {on_disk}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jobs_update_persists_to_config_file() {
+        let (server, tmp) = test_server_persistent();
+        server
+            .post("/jobs/0")
+            .add_header("HX-Request", "true")
+            .form(&[
+                ("name", "RenamedPersisted"),
+                ("output_path", tmp.path().to_str().unwrap()),
+                ("color", "#0000ff"),
+                ("resolution", "300"),
+                ("jpeg_quality", "80"),
+                ("pixel_format", "rgb24"),
+                ("consume_path", ""),
+            ])
+            .await;
+        let on_disk = std::fs::read_to_string(tmp.path().join("config.yaml")).unwrap();
+        assert!(
+            on_disk.contains("RenamedPersisted"),
+            "updated job must be written to config file; got: {on_disk}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jobs_delete_persists_to_config_file() {
+        let (server, tmp) = test_server_persistent();
+        server
+            .delete("/jobs/0")
+            .add_header("HX-Request", "true")
+            .await;
+        let on_disk = std::fs::read_to_string(tmp.path().join("config.yaml")).unwrap();
+        assert!(
+            !on_disk.contains("TestJob"),
+            "deleted job must be removed from config file; got: {on_disk}"
+        );
+    }
 }

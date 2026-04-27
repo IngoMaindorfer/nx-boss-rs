@@ -76,6 +76,16 @@ async fn main() -> Result<()> {
     info!("Loaded {} job(s)", config.jobs.len());
 
     let config_path = cli.config.canonicalize().unwrap_or(cli.config.clone());
+    if std::fs::OpenOptions::new()
+        .append(true)
+        .open(&config_path)
+        .is_err()
+    {
+        warn!(
+            path = %config_path.display(),
+            "config file is not writable — job changes will NOT survive a restart (check for :ro volume mount)"
+        );
+    }
     let state = state::AppState::new(config).with_config_path(config_path);
     let app = routes::router(state.clone());
 
