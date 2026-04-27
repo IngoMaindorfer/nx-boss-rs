@@ -8,6 +8,7 @@ use axum::{
 use serde::Deserialize;
 
 use super::ui::{JobRow, job_rows, render};
+use crate::build_info::BuildInfo;
 use crate::config::{
     DEFAULT_COLOR, DEFAULT_JPEG_QUALITY, DEFAULT_PIXEL_FORMAT, DEFAULT_RESOLUTION, DEFAULT_SOURCE,
     Job, KEY_JPEG_QUALITY, KEY_PIXEL_FORMAT, KEY_PIXEL_FORMATS, KEY_RESOLUTION, KEY_SOURCE,
@@ -22,6 +23,7 @@ use crate::translations::Translations;
 struct JobsListTpl {
     jobs: Vec<JobRow>,
     t: &'static Translations,
+    build: &'static BuildInfo,
 }
 
 #[derive(Template)]
@@ -39,6 +41,7 @@ struct JobsFormTpl {
     source: String,
     error: Option<String>,
     t: &'static Translations,
+    build: &'static BuildInfo,
 }
 
 #[derive(Deserialize)]
@@ -72,6 +75,7 @@ pub async fn jobs_list(State(state): State<AppState>) -> Response {
     render(JobsListTpl {
         jobs: job_rows(&jobs),
         t: state.translations,
+        build: state.build_info,
     })
 }
 
@@ -89,6 +93,7 @@ pub async fn jobs_new(State(state): State<AppState>) -> Response {
         source: DEFAULT_SOURCE.to_string(),
         error: None,
         t: state.translations,
+        build: state.build_info,
     })
 }
 
@@ -99,7 +104,16 @@ pub async fn jobs_create(
 ) -> Response {
     let new_job = match apply_job_form(&form, state.translations) {
         Ok(j) => j,
-        Err(e) => return render(form_to_tpl(false, 0, &form, Some(e), state.translations)),
+        Err(e) => {
+            return render(form_to_tpl(
+                false,
+                0,
+                &form,
+                Some(e),
+                state.translations,
+                state.build_info,
+            ));
+        }
     };
     let snapshot = {
         let mut jobs = lock!(state.jobs);
@@ -138,6 +152,7 @@ pub async fn jobs_edit(Path(id): Path<usize>, State(state): State<AppState>) -> 
         source: job.source().to_string(),
         error: None,
         t: state.translations,
+        build: state.build_info,
     })
 }
 
@@ -149,7 +164,16 @@ pub async fn jobs_update(
 ) -> Response {
     let updated = match apply_job_form(&form, state.translations) {
         Ok(j) => j,
-        Err(e) => return render(form_to_tpl(true, id, &form, Some(e), state.translations)),
+        Err(e) => {
+            return render(form_to_tpl(
+                true,
+                id,
+                &form,
+                Some(e),
+                state.translations,
+                state.build_info,
+            ));
+        }
     };
     let snapshot = {
         let mut jobs = lock!(state.jobs);
@@ -264,6 +288,7 @@ fn form_to_tpl(
     form: &JobFormData,
     error: Option<String>,
     t: &'static Translations,
+    build: &'static BuildInfo,
 ) -> JobsFormTpl {
     JobsFormTpl {
         editing,
@@ -278,6 +303,7 @@ fn form_to_tpl(
         pixel_format: form.pixel_format.clone(),
         source: form.source.clone(),
         t,
+        build,
     }
 }
 

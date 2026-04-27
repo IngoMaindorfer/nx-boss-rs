@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use chrono::{DateTime, Utc};
 
 use crate::batch::Batch;
+use crate::build_info::{BUILD, BuildInfo};
 use crate::config::{Config, Job, RetentionConfig};
 use crate::translations::Translations;
 
@@ -108,12 +109,14 @@ pub struct AppState {
     pub config_path: Option<PathBuf>,
     pub lang: String,
     pub translations: &'static Translations,
+    pub build_info: &'static BuildInfo,
 }
 
 impl AppState {
     pub fn new(config: Config) -> Self {
         Self {
             translations: crate::translations::for_lang(&config.lang),
+            build_info: &BUILD,
             lang: config.lang.clone(),
             scanner: ScannerState::default(),
             jobs: JobStore::new(config.jobs),

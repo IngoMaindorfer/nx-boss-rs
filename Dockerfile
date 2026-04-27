@@ -12,6 +12,9 @@ COPY src/ src/
 COPY defaults.yaml ./
 COPY templates/ templates/
 
+ARG GIT_SHA=dev
+ENV GIT_SHA=$GIT_SHA
+
 RUN cargo build --release --target x86_64-unknown-linux-musl
 
 FROM alpine:3 AS tools

@@ -6,6 +6,7 @@ use axum::{
 };
 
 use crate::batch::BatchMetadata;
+use crate::build_info::BuildInfo;
 use crate::config::Job;
 use crate::lock;
 use crate::state::AppState;
@@ -139,6 +140,7 @@ struct DashboardTpl {
     recent_scans: Vec<ScanEntry>,
     jobs: Vec<JobRow>,
     t: &'static Translations,
+    build: &'static BuildInfo,
 }
 
 #[derive(Template)]
@@ -170,6 +172,7 @@ pub async fn dashboard(State(state): State<AppState>) -> Response {
         recent_scans,
         jobs: job_rows,
         t: state.translations,
+        build: state.build_info,
     })
 }
 

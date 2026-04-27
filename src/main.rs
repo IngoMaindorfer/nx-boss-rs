@@ -31,6 +31,7 @@ async fn shutdown_signal() {
 }
 
 mod batch;
+mod build_info;
 mod config;
 mod pdf;
 mod retention;

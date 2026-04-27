@@ -8,6 +8,7 @@ use axum::{
 use super::ui::{ScanEntry, find_batch_dir, list_scans, render};
 use crate::batch::is_safe_path;
 use crate::batch::{BatchMetadata, JobConfig};
+use crate::build_info::BuildInfo;
 use crate::lock;
 use crate::state::AppState;
 use crate::translations::Translations;
@@ -17,6 +18,7 @@ use crate::translations::Translations;
 struct ScansListTpl {
     scans: Vec<ScanEntry>,
     t: &'static Translations,
+    build: &'static BuildInfo,
 }
 
 #[derive(Template)]
@@ -34,6 +36,7 @@ struct ScansDetailTpl {
     jpeg_quality: u8,
     source: String,
     t: &'static Translations,
+    build: &'static BuildInfo,
 }
 
 pub async fn scans_list(State(state): State<AppState>) -> Response {
@@ -42,6 +45,7 @@ pub async fn scans_list(State(state): State<AppState>) -> Response {
     render(ScansListTpl {
         scans,
         t: state.translations,
+        build: state.build_info,
     })
 }
 
@@ -77,6 +81,7 @@ pub async fn scans_detail(Path(batch_id): Path<String>, State(state): State<AppS
         jpeg_quality,
         source,
         t: state.translations,
+        build: state.build_info,
     })
 }
 

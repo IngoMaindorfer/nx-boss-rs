@@ -3,6 +3,7 @@ use axum::{Form, extract::State, response::Response};
 use serde::Deserialize;
 
 use super::ui::render;
+use crate::build_info::BuildInfo;
 use crate::config::RetentionConfig;
 use crate::lock;
 use crate::state::AppState;
@@ -16,6 +17,7 @@ struct SettingsTpl {
     saved: bool,
     error: Option<String>,
     t: &'static Translations,
+    build: &'static BuildInfo,
 }
 
 #[derive(Deserialize)]
@@ -32,6 +34,7 @@ pub async fn settings_get(State(state): State<AppState>) -> Response {
         saved: false,
         error: None,
         t: state.translations,
+        build: state.build_info,
     })
 }
 
@@ -49,6 +52,7 @@ pub async fn settings_post(
             saved: false,
             error: Some(state.translations.err_delete_gt_archive.to_string()),
             t: state.translations,
+            build: state.build_info,
         });
     }
     let new_cfg = RetentionConfig {
@@ -64,6 +68,7 @@ pub async fn settings_post(
         saved: true,
         error: None,
         t: state.translations,
+        build: state.build_info,
     })
 }
 

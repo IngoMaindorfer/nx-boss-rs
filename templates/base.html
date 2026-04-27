@@ -12,6 +12,9 @@
     nav .logo { font-size: 1.1rem; font-weight: 700; padding: .5rem .75rem; margin-bottom: 1rem; letter-spacing: .04em; }
     nav a { display: block; padding: .5rem .75rem; color: rgba(255,255,255,.75); text-decoration: none; border-radius: 6px; font-size: .9rem; }
     nav a:hover, nav a.active { background: rgba(255,255,255,.15); color: #fff; }
+    .nav-footer { margin-top: auto; padding-top: 1rem; font-size: .72rem; color: rgba(255,255,255,.4); line-height: 1.6; }
+    .nav-footer a { color: rgba(255,255,255,.5); text-decoration: none; }
+    .nav-footer a:hover { color: rgba(255,255,255,.8); }
     main { flex: 1; padding: 2rem; min-width: 0; }
     h2 { font-size: 1.4rem; font-weight: 600; margin-bottom: 1.5rem; color: #1a237e; }
     h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 1rem; }
@@ -57,6 +60,10 @@
     <a href="/jobs">{{ t.nav_jobs }}</a>
     <a href="/scans">Scans</a>
     <a href="/settings">{{ t.nav_settings }}</a>
+    <div class="nav-footer">
+      <div>v{{ build.version }} &middot; <a href="{{ build.commit_url() }}" target="_blank" rel="noopener">{{ build.short_sha() }}</a></div>
+      <div><a href="{{ build.repository }}" target="_blank" rel="noopener">GitHub</a></div>
+    </div>
   </nav>
   <main>
     {% block content %}{% endblock %}
