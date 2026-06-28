@@ -30,7 +30,7 @@ askama = "0.15"
 indexmap = { version = "2", features = ["serde"] }
 
 [dev-dependencies]
-axum-test = "20"
+axum-test = "21"
 tempfile = "3"
 
 [profile.release]
