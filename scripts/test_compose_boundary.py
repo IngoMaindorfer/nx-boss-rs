@@ -85,6 +85,12 @@ if __name__ == "__main__":
     assert Path("resources/defaults.yaml").is_file()
     assert "COPY resources/defaults.yaml ./resources/defaults.yaml" in Path("Dockerfile").read_text()
     caddyfile = Path("deploy/Caddyfile").read_text()
+    # HSTS belongs to TLS listeners only; it never applies on the scanner HTTP listener.
+    for block in caddyfile.split('\n\n')[1:]:
+        if block.startswith('https://'):
+            assert 'header Strict-Transport-Security "max-age=31536000"' in block
+        elif block.startswith('http://'):
+            assert 'Strict-Transport-Security' not in block
     assert "dns cloudflare" in caddyfile and "tls internal" not in caddyfile
     assert not any(
         line.lstrip().upper().startswith("EXPOSE ")

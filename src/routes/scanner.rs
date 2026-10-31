@@ -33,17 +33,34 @@ pub struct DevicePayload {
     pub serial_no: String,
 }
 
-pub async fn device(
-    State(state): State<AppState>,
-    Json(payload): Json<DevicePayload>,
-) -> Json<Value> {
+pub async fn device(State(state): State<AppState>, Json(payload): Json<DevicePayload>) -> Response {
+    if [
+        &payload.scanner_name,
+        &payload.scanner_model,
+        &payload.serial_no,
+    ]
+    .iter()
+    .any(|v| v.len() > 256)
+        || [
+            &payload.call_timing,
+            &payload.scanner_ip,
+            &payload.scanner_mac,
+        ]
+        .iter()
+        .any(|v| v.len() > 64)
+        || [&payload.scanner_port, &payload.scanner_protocol]
+            .iter()
+            .any(|v| v.len() > 16)
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
     info!(event = "scanner.registered", "scanner registered");
     state.scanner.set_info(
         payload.scanner_name,
         payload.scanner_model,
         payload.serial_no,
     );
-    Json(json!({ "system_time": now_iso(), "server_version": "2.6.0.4" }))
+    Json(json!({ "system_time": now_iso(), "server_version": "2.6.0.4" })).into_response()
 }
 
 #[derive(Deserialize)]
@@ -471,6 +488,30 @@ mod tests {
             ..Default::default()
         };
         TestApp::new(AppState::new(config))
+    }
+
+    #[tokio::test]
+    async fn device_metadata_and_request_body_are_bounded() {
+        let server = empty_server();
+        let fields = serde_json::json!({"call_timing":"startup","scanner_ip":"127.0.0.1","scanner_mac":"00:11:22:33:44:55","scanner_model":"test","scanner_name":"x".repeat(512),"scanner_port":"20448","scanner_protocol":"https","serial_no":"test"});
+        assert_eq!(
+            server
+                .post("/NmWebService/device")
+                .json(&fields)
+                .await
+                .status_code(),
+            400
+        );
+        let mut huge = fields;
+        huge["scanner_name"] = serde_json::Value::String("x".repeat(17000));
+        assert_eq!(
+            server
+                .post("/NmWebService/device")
+                .json(&huge)
+                .await
+                .status_code(),
+            413
+        );
     }
 
     #[tokio::test]

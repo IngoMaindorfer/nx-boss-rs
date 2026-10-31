@@ -158,7 +158,7 @@ pub async fn scans_file(
         Ok(bytes) => (
             [
                 ("content-type", "image/jpeg"),
-                ("cache-control", "max-age=3600"),
+                ("cache-control", "private, no-store"),
             ],
             bytes,
         )

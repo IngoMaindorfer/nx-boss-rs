@@ -12,12 +12,20 @@ const MAX_FILE_BYTES: u64 = 256 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct EventRecord {
+    #[serde(default = "one")]
+    pub count: u64,
+    #[serde(default)]
+    pub last_seen: String,
     pub timestamp: String,
     pub level: String,
     pub event: String,
     pub batch_id: Option<String>,
     pub error_class: Option<String>,
     pub http_status: Option<u16>,
+}
+
+fn one() -> u64 {
+    1
 }
 
 #[derive(Default)]
@@ -28,7 +36,41 @@ struct Inner {
 }
 
 #[derive(Clone, Default)]
-pub struct EventLog(Arc<Mutex<Inner>>);
+pub struct EventLog {
+    inner: Arc<Mutex<Inner>>,
+    writer: Arc<Mutex<Option<JournalWriter>>>,
+    persistence_lock: Arc<Mutex<()>>,
+}
+
+struct JournalWriter {
+    signal: Option<std::sync::mpsc::SyncSender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for JournalWriter {
+    fn drop(&mut self) {
+        self.signal.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn persist(inner: &Mutex<Inner>, io: &Mutex<()>) -> Result<()> {
+    let _io = crate::lock!(io);
+    let (path, records) = {
+        let state = crate::lock!(inner);
+        (state.path.clone(), state.records.clone())
+    };
+    let Some(path) = path else {
+        return Ok(());
+    };
+    let result = serde_json::to_vec(&records)
+        .map_err(anyhow::Error::from)
+        .and_then(|bytes| crate::atomic_file::write(&path, &bytes));
+    crate::lock!(inner).persistence_ok = result.is_ok();
+    result
+}
 
 impl EventLog {
     pub fn attach(&self, path: PathBuf) -> Result<()> {
@@ -51,7 +93,7 @@ impl EventLog {
         } else {
             VecDeque::new()
         };
-        let mut inner = crate::lock!(self.0);
+        let mut inner = crate::lock!(self.inner);
         let startup = std::mem::take(&mut inner.records);
         inner.records = records.into_iter().rev().take(MAX_EVENTS).collect();
         inner.records.make_contiguous().reverse();
@@ -59,12 +101,33 @@ impl EventLog {
         while inner.records.len() > MAX_EVENTS {
             inner.records.pop_front();
         }
-        inner.path = Some(path.clone());
-        let bytes = serde_json::to_vec(&inner.records)?;
-        let result = crate::atomic_file::write(&path, &bytes);
-        inner.persistence_ok = result.is_ok();
-        result?;
+        inner.path = Some(path);
+        drop(inner);
+        self.flush()?;
+        let mut writer = crate::lock!(self.writer);
+        if writer.is_none() {
+            let (signal, messages) = std::sync::mpsc::sync_channel(1);
+            let inner = self.inner.clone();
+            let io = self.persistence_lock.clone();
+            let thread = std::thread::spawn(move || {
+                while messages.recv().is_ok() {
+                    // Bounded write cadence, with no filesystem I/O on request threads.
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    while messages.try_recv().is_ok() {}
+                    let _ = persist(&inner, &io);
+                }
+                let _ = persist(&inner, &io);
+            });
+            *writer = Some(JournalWriter {
+                signal: Some(signal),
+                thread: Some(thread),
+            });
+        }
         Ok(())
+    }
+
+    pub fn flush(&self) -> Result<()> {
+        persist(&self.inner, &self.persistence_lock)
     }
 
     pub fn record(
@@ -78,8 +141,11 @@ impl EventLog {
         if !matches!(level, "WARN" | "ERROR") {
             return;
         }
-        let record = EventRecord {
-            timestamp: chrono::Utc::now().to_rfc3339(),
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut record = EventRecord {
+            count: 1,
+            last_seen: now.clone(),
+            timestamp: now,
             level: level.to_string(),
             event: safe_code(event, 80).unwrap_or_else(|| "unknown".to_string()),
             batch_id: batch_id
@@ -88,25 +154,41 @@ impl EventLog {
             error_class: error_class.and_then(|value| safe_code(value, 40)),
             http_status: http_status.filter(|status| *status == 0 || (100..=599).contains(status)),
         };
-        let mut inner = crate::lock!(self.0);
+        let mut inner = crate::lock!(self.inner);
+        if let Some(index) = inner.records.iter().position(|old| {
+            old.level == record.level
+                && old.event == record.event
+                && old.batch_id == record.batch_id
+                && old.error_class == record.error_class
+                && old.http_status == record.http_status
+        }) {
+            let old = inner.records.remove(index).expect("existing event");
+            record.timestamp = old.timestamp;
+            record.count = old.count.saturating_add(1);
+        }
         inner.records.push_back(record);
         while inner.records.len() > MAX_EVENTS {
             inner.records.pop_front();
         }
-        if let Some(path) = inner.path.as_ref() {
-            inner.persistence_ok = serde_json::to_vec(&inner.records)
-                .ok()
-                .and_then(|bytes| crate::atomic_file::write(path, &bytes).ok())
-                .is_some();
+        drop(inner);
+        if let Some(writer) = crate::lock!(self.writer).as_ref()
+            && let Some(signal) = &writer.signal
+        {
+            let _ = signal.try_send(());
         }
     }
 
     pub fn recent(&self) -> Vec<EventRecord> {
-        crate::lock!(self.0).records.iter().rev().cloned().collect()
+        crate::lock!(self.inner)
+            .records
+            .iter()
+            .rev()
+            .cloned()
+            .collect()
     }
 
     pub fn persistence_ok(&self) -> bool {
-        crate::lock!(self.0).persistence_ok
+        crate::lock!(self.inner).persistence_ok
     }
 }
 
@@ -178,20 +260,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn repeated_events_are_coalesced_instead_of_evicting_other_failures() {
+        let log = EventLog::default();
+        for _ in 0..210 {
+            log.record(
+                "WARN",
+                "paperless.delivery_failed",
+                None,
+                Some("http_status"),
+                Some(503),
+            );
+        }
+        assert_eq!(log.recent().len(), 1);
+        assert_eq!(log.recent()[0].count, 210);
+    }
+
+    #[test]
+    fn recording_does_not_wait_for_filesystem_io() {
+        let root = tempfile::tempdir().unwrap();
+        let log = EventLog::default();
+        log.attach(root.path().join("events.json")).unwrap();
+        let io = crate::lock!(log.persistence_lock);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let other = log.clone();
+        std::thread::spawn(move || {
+            other.record("WARN", "test.warning", None, None, None);
+            tx.send(()).unwrap();
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+        drop(io);
+        log.flush().unwrap();
+    }
+
+    #[test]
     fn persists_bounded_safe_events_across_restart() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("events.json");
         let log = EventLog::default();
         log.attach(path.clone()).unwrap();
-        for _ in 0..210 {
+        for index in 0..210 {
             log.record(
                 "WARN",
                 "paperless.delivery_failed",
-                Some(&"a".repeat(32)),
+                Some(&format!("{index:032x}")),
                 Some("http_status"),
                 Some(503),
             );
         }
+        log.flush().unwrap();
         let reopened = EventLog::default();
         reopened.attach(path).unwrap();
         let records = reopened.recent();
@@ -219,6 +335,7 @@ mod tests {
         assert_eq!(records[0].event, "unknown");
         assert_eq!(records[0].batch_id, None);
         assert_eq!(records[0].error_class, None);
+        log.flush().unwrap();
         assert!(!std::fs::read_to_string(path).unwrap().contains("SECRET"));
     }
 

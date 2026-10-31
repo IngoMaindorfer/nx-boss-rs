@@ -103,6 +103,9 @@ jobs:
       - name: Test graceful shutdown and scan recovery
         run: python3 scripts/test_shutdown.py ./target/release/nx-boss-rs
 
+      - name: Test local scanning with unavailable Paperless configuration
+        run: python3 scripts/test_paperless_pause.py ./target/release/nx-boss-rs
+
       - name: Test structured logs and secret redaction
         run: python3 scripts/test_logging.py ./target/release/nx-boss-rs
 
