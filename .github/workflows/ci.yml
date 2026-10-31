@@ -259,7 +259,7 @@ jobs:
           test ! -e caddy-acme
           mkdir -p caddy-acme/data caddy-acme/config
           chmod 700 caddy-acme caddy-acme/data caddy-acme/config
-          docker compose up -d --no-build
+          docker compose up -d --no-build --wait --wait-timeout 120
           curl --noproxy '*' -fsS http://127.0.0.2:21447/health >/dev/null
           NO_PROXY=127.0.0.2 bash scripts/test_scan.sh 127.0.0.2:21447 scans
           for i in $(seq 1 30); do
