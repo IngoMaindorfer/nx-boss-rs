@@ -1,9 +1,9 @@
-FROM caddy:2.11.4-builder-alpine AS caddy-builder
+FROM caddy:2.11.6-builder-alpine AS caddy-builder
 
 # DNS-01 for private LAN addresses needs the Cloudflare module.
 RUN xcaddy build v2.11.4 --with github.com/caddy-dns/cloudflare@a8737d0
 
-FROM caddy:2.11.4-alpine AS caddy
+FROM caddy:2.11.6-alpine AS caddy
 COPY --from=caddy-builder /usr/bin/caddy /usr/bin/caddy
 COPY scripts/start-caddy.sh /usr/local/bin/start-caddy.sh
 
