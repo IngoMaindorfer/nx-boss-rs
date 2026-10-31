@@ -182,14 +182,13 @@ pub async fn put_batch(
 
 #[cfg(test)]
 mod tests {
-    use axum_test::TestServer;
     use serde_json::{Value, json};
 
     use crate::config::{Config, Job};
-    use crate::routes::router;
+    use crate::routes::test_support::TestApp;
     use crate::state::AppState;
 
-    fn test_server() -> (TestServer, tempfile::TempDir) {
+    fn test_server() -> (TestApp, tempfile::TempDir) {
         let tmp = tempfile::TempDir::new().unwrap();
         let config = Config {
             jobs: vec![Job {
@@ -203,18 +202,18 @@ mod tests {
             }],
             ..Default::default()
         };
-        (TestServer::new(router(AppState::new(config))), tmp)
+        (TestApp::new(AppState::new(config)), tmp)
     }
 
-    fn empty_server() -> TestServer {
+    fn empty_server() -> TestApp {
         let config = Config {
             jobs: vec![],
             ..Default::default()
         };
-        TestServer::new(router(AppState::new(config)))
+        TestApp::new(AppState::new(config))
     }
 
-    async fn create_batch(server: &TestServer) -> String {
+    async fn create_batch(server: &TestApp) -> String {
         server
             .post("/NmWebService/batch")
             .json(&json!({"job_id": 0}))
@@ -330,7 +329,7 @@ mod tests {
             }],
             ..Default::default()
         });
-        let server = TestServer::new(router(state.clone()));
+        let server = TestApp::new(state.clone());
         let id = create_batch(&server).await;
         let permit = state.pdf_slots.clone().acquire_owned().await.unwrap();
         assert_eq!(

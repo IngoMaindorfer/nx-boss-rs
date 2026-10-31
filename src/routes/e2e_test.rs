@@ -7,17 +7,16 @@
 /// (Wikimedia Commons, CC0 / U.S. government work).
 #[cfg(test)]
 mod tests {
-    use axum_test::TestServer;
     use serde_json::{Value, json};
 
     use crate::config::{Config, Job};
-    use crate::routes::router;
+    use crate::routes::test_support::TestApp;
     use crate::state::AppState;
 
     // Real JPEG embedded at compile time — validates the full encode/decode path.
     const SCAN_PAGE: &[u8] = include_bytes!("../../tests/fixtures/scan_page.jpg");
 
-    fn test_server() -> (TestServer, tempfile::TempDir) {
+    fn test_server() -> (TestApp, tempfile::TempDir) {
         let tmp = tempfile::TempDir::new().unwrap();
         let consume = tmp.path().join("consume");
         std::fs::create_dir_all(&consume).unwrap();
@@ -33,7 +32,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        (TestServer::new(router(AppState::new(config))), tmp)
+        (TestApp::new(AppState::new(config)), tmp)
     }
 
     fn multipart_body(boundary: &str, image: &[u8], filename: &str, param_json: &str) -> Vec<u8> {

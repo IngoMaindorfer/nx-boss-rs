@@ -445,10 +445,10 @@ mod tests {
     use serde_json::json;
 
     use crate::config::{Config, Job};
-    use crate::routes::router;
+    use crate::routes::test_support::TestApp;
     use crate::state::AppState;
 
-    fn test_server_with_job() -> TestServer {
+    fn test_server_with_job() -> TestApp {
         let tmp = tempfile::TempDir::new().unwrap();
         let config = Config {
             jobs: vec![Job {
@@ -462,15 +462,15 @@ mod tests {
             }],
             ..Default::default()
         };
-        TestServer::new(router(AppState::new(config)))
+        TestApp::new(AppState::new(config))
     }
 
-    fn empty_server() -> TestServer {
+    fn empty_server() -> TestApp {
         let config = Config {
             jobs: vec![],
             ..Default::default()
         };
-        TestServer::new(router(AppState::new(config)))
+        TestApp::new(AppState::new(config))
     }
 
     #[tokio::test]
@@ -529,7 +529,7 @@ mod tests {
             Some(&password_file),
         )
         .unwrap();
-        let server = TestServer::new(router(AppState::new(config).with_scanner_auth_mode(mode)));
+        let server = TestApp::new(AppState::new(config).with_scanner_auth_mode(mode));
 
         let offer = server
             .get("/NmWebService/authorization")
@@ -617,7 +617,7 @@ mod tests {
     #[tokio::test]
     async fn changing_scanner_mode_replaces_live_sessions() {
         let state = AppState::new(Config::default());
-        let server = TestServer::new(router(state.clone()));
+        let server = TestApp::new(state.clone());
         assert_eq!(
             server
                 .get("/NmWebService/authorization")

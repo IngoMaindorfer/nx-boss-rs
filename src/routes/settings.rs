@@ -327,13 +327,12 @@ pub async fn settings_post(
 
 #[cfg(test)]
 mod tests {
-    use axum_test::TestServer;
 
     use crate::config::{Config, Job};
-    use crate::routes::router;
+    use crate::routes::test_support::TestApp;
     use crate::state::AppState;
 
-    fn test_server() -> (TestServer, tempfile::TempDir) {
+    fn test_server() -> (TestApp, tempfile::TempDir) {
         let tmp = tempfile::TempDir::new().unwrap();
         let config = Config {
             jobs: vec![Job {
@@ -347,7 +346,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        (TestServer::new(router(AppState::new(config))), tmp)
+        (TestApp::new(AppState::new(config)), tmp)
     }
 
     #[tokio::test]
@@ -361,6 +360,8 @@ mod tests {
         let (server, _tmp) = test_server();
         let resp = server
             .post("/settings")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[("archive_after_days", "7"), ("delete_after_days", "30")])
             .await;
@@ -373,6 +374,8 @@ mod tests {
         let (server, _tmp) = test_server();
         let resp = server
             .post("/settings")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[("archive_after_days", "30"), ("delete_after_days", "7")])
             .await;
@@ -385,6 +388,8 @@ mod tests {
         let (server, _tmp) = test_server();
         let resp = server
             .post("/settings")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[("archive_after_days", "0"), ("delete_after_days", "0")])
             .await;
@@ -397,6 +402,8 @@ mod tests {
         let (server, _tmp) = test_server();
         let resp = server
             .post("/settings")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[("archive_after_days", "7"), ("delete_after_days", "0")])
             .await;

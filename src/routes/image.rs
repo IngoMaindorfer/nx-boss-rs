@@ -207,14 +207,13 @@ pub async fn post_image(
 
 #[cfg(test)]
 mod tests {
-    use axum_test::TestServer;
     use serde_json::{Value, json};
 
     use crate::config::{Config, Job};
-    use crate::routes::router;
+    use crate::routes::test_support::TestApp;
     use crate::state::AppState;
 
-    fn test_server() -> (TestServer, tempfile::TempDir) {
+    fn test_server() -> (TestApp, tempfile::TempDir) {
         let tmp = tempfile::TempDir::new().unwrap();
         let config = Config {
             jobs: vec![Job {
@@ -228,7 +227,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let server = TestServer::new(router(AppState::new(config)));
+        let server = TestApp::new(AppState::new(config));
         (server, tmp)
     }
 
@@ -258,7 +257,7 @@ mod tests {
         body
     }
 
-    async fn create_batch(server: &TestServer) -> String {
+    async fn create_batch(server: &TestApp) -> String {
         let resp = server
             .post("/NmWebService/batch")
             .json(&json!({"job_id": 0}))
@@ -444,7 +443,7 @@ mod tests {
             .acquire_many_owned(2)
             .await
             .unwrap();
-        let server = TestServer::new(router(state));
+        let server = TestApp::new(state);
         let resp = server
             .post("/NmWebService/image")
             .content_type("multipart/form-data; boundary=busy")

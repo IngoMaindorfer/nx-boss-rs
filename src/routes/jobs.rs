@@ -586,7 +586,6 @@ fn form_to_tpl(
 
 #[cfg(test)]
 mod tests {
-    use axum_test::TestServer;
     use serde_json::json;
 
     use crate::config::{Config, Job};
@@ -618,10 +617,10 @@ mod tests {
         assert!(!job.to_raw().1.job_settings.unwrap().contains_key("duplex"));
     }
     use crate::lock;
-    use crate::routes::router;
+    use crate::routes::test_support::TestApp;
     use crate::state::AppState;
 
-    fn test_server() -> (TestServer, tempfile::TempDir) {
+    fn test_server() -> (TestApp, tempfile::TempDir) {
         let tmp = tempfile::TempDir::new().unwrap();
         let config = Config {
             jobs: vec![Job {
@@ -635,10 +634,10 @@ mod tests {
             }],
             ..Default::default()
         };
-        (TestServer::new(router(AppState::new(config))), tmp)
+        (TestApp::new(AppState::new(config)), tmp)
     }
 
-    fn reorder_server() -> (TestServer, AppState, tempfile::TempDir, std::path::PathBuf) {
+    fn reorder_server() -> (TestApp, AppState, tempfile::TempDir, std::path::PathBuf) {
         let tmp = tempfile::TempDir::new().unwrap();
         let config_path = tmp.path().join("config.yaml");
         let jobs = [(7, "First"), (2, "Second"), (11, "Third")]
@@ -661,12 +660,7 @@ mod tests {
             ..Default::default()
         })
         .with_config_path(config_path.clone());
-        (
-            TestServer::new(router(state.clone())),
-            state,
-            tmp,
-            config_path,
-        )
+        (TestApp::new(state.clone()), state, tmp, config_path)
     }
 
     #[tokio::test]
@@ -674,6 +668,8 @@ mod tests {
         let (server, state, _tmp, config_path) = reorder_server();
         let response = server
             .post("/jobs/reorder")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .json(&json!({"expected_order": [7, 2, 11], "order": [11, 7, 2]}))
             .await;
@@ -706,6 +702,8 @@ mod tests {
         assert_eq!(
             server
                 .post("/jobs/reorder")
+                .add_header("origin", "https://localhost")
+                .add_header("x-forwarded-proto", "https")
                 .add_header("HX-Request", "true")
                 .json(&json!({"expected_order": [7, 2, 11], "order": [2, 11, 7]}))
                 .await
@@ -736,6 +734,8 @@ mod tests {
             assert_eq!(
                 server
                     .post("/jobs/reorder")
+                    .add_header("origin", "https://localhost")
+                    .add_header("x-forwarded-proto", "https")
                     .add_header("HX-Request", "true")
                     .json(&body)
                     .await
@@ -751,6 +751,8 @@ mod tests {
         assert_eq!(
             server
                 .post("/jobs/reorder")
+                .add_header("origin", "https://attacker.invalid")
+                .add_header("x-forwarded-proto", "https")
                 .json(&json!({"expected_order": [7, 2, 11], "order": [11, 7, 2]}))
                 .await
                 .status_code(),
@@ -767,11 +769,13 @@ mod tests {
             ..Default::default()
         })
         .with_config_path(bad_path);
-        let broken_server = TestServer::new(router(broken_state.clone()));
+        let broken_server = TestApp::new(broken_state.clone());
         drop(server);
         assert_eq!(
             broken_server
                 .post("/jobs/reorder")
+                .add_header("origin", "https://localhost")
+                .add_header("x-forwarded-proto", "https")
                 .add_header("HX-Request", "true")
                 .json(&json!({"expected_order": [7, 2, 11], "order": [11, 7, 2]}))
                 .await
@@ -836,9 +840,11 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let state =
             AppState::new(Config::default()).with_default_output_path(tmp.path().to_path_buf());
-        let server = TestServer::new(router(state.clone()));
+        let server = TestApp::new(state.clone());
         let response = server
             .post("/jobs")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[
                 ("name", "New"),
@@ -859,6 +865,8 @@ mod tests {
         std::fs::create_dir(&other).unwrap();
         let response = server
             .post("/jobs/0")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[
                 ("name", "TestJob"),
@@ -883,9 +891,11 @@ mod tests {
             tmp.path().display()
         );
         let state = AppState::new(Config::parse(&yaml).unwrap());
-        let server = TestServer::new(router(state.clone()));
+        let server = TestApp::new(state.clone());
         let response = server
             .post("/jobs/0")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[
                 ("name", "Advanced"),
@@ -925,6 +935,8 @@ mod tests {
         let (server, tmp) = test_server();
         let resp = server
             .post("/jobs/0")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[
                 ("name", "UpdatedJob"),
@@ -952,6 +964,8 @@ mod tests {
         std::fs::create_dir_all(&out).unwrap();
         let resp = server
             .post("/jobs")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[
                 ("name", "NewJob"),
@@ -979,6 +993,8 @@ mod tests {
         std::fs::create_dir_all(&out).unwrap();
         server
             .post("/jobs")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[
                 ("name", "CreatedJob"),
@@ -998,6 +1014,8 @@ mod tests {
         let (server, tmp) = test_server();
         let resp = server
             .post("/jobs/0")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[
                 ("name", "UpdatedJob"),
@@ -1023,6 +1041,8 @@ mod tests {
         let (server, tmp) = test_server();
         server
             .post("/jobs/0")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[
                 ("name", "RenamedJob"),
@@ -1042,6 +1062,8 @@ mod tests {
         let (server, _tmp) = test_server();
         let resp = server
             .delete("/jobs/0")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .await;
         assert_eq!(resp.status_code(), 204);
@@ -1058,6 +1080,8 @@ mod tests {
         let (server, _tmp) = test_server();
         server
             .delete("/jobs/0")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .await;
         assert!(!server.get("/jobs").await.text().contains("TestJob"));
@@ -1066,7 +1090,7 @@ mod tests {
     /// Jobs created/updated/deleted must be written to the config file on disk
     /// so they survive a container restart. This requires config_path to be set
     /// (with_config_path) and the file to be writable (not :ro mounted).
-    fn test_server_persistent() -> (TestServer, tempfile::TempDir) {
+    fn test_server_persistent() -> (TestApp, tempfile::TempDir) {
         let tmp = tempfile::TempDir::new().unwrap();
         let config_file = tmp.path().join("config.yaml");
         std::fs::write(&config_file, "jobs: {}\n").unwrap();
@@ -1083,7 +1107,7 @@ mod tests {
             ..Default::default()
         };
         let state = crate::state::AppState::new(config).with_config_path(config_file);
-        (TestServer::new(router(state)), tmp)
+        (TestApp::new(state), tmp)
     }
 
     #[tokio::test]
@@ -1093,6 +1117,8 @@ mod tests {
         std::fs::create_dir_all(&out).unwrap();
         server
             .post("/jobs")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[
                 ("name", "PersistedJob"),
@@ -1116,9 +1142,11 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let state = AppState::new(Config::default())
             .with_config_path(tmp.path().join("missing/config.yaml"));
-        let server = TestServer::new(router(state.clone()));
+        let server = TestApp::new(state.clone());
         let resp = server
             .post("/jobs")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[
                 ("name", "New"),
@@ -1147,10 +1175,12 @@ mod tests {
             jobs: vec![make_job("A", 0), make_job("B", 1)],
             ..Default::default()
         });
-        let server = TestServer::new(router(state));
+        let server = TestApp::new(state);
         assert_eq!(
             server
                 .delete("/jobs/0")
+                .add_header("origin", "https://localhost")
+                .add_header("x-forwarded-proto", "https")
                 .add_header("HX-Request", "true")
                 .await
                 .status_code(),
@@ -1184,13 +1214,15 @@ mod tests {
             )
             .unwrap();
         batch.complete().unwrap();
-        let server = TestServer::new(router(AppState::new(Config {
+        let server = TestApp::new(AppState::new(Config {
             jobs: vec![job],
             ..Default::default()
-        })));
+        }));
         assert_eq!(
             server
                 .delete("/jobs/0")
+                .add_header("origin", "https://localhost")
+                .add_header("x-forwarded-proto", "https")
                 .add_header("HX-Request", "true")
                 .await
                 .status_code(),
@@ -1210,6 +1242,8 @@ mod tests {
         std::fs::create_dir(&new_path).unwrap();
         let resp = server
             .post("/jobs/0")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[
                 ("name", "TestJob"),
@@ -1234,6 +1268,8 @@ mod tests {
         let (server, tmp) = test_server_persistent();
         server
             .post("/jobs/0")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[
                 ("name", "RenamedPersisted"),
@@ -1257,6 +1293,8 @@ mod tests {
         let (server, tmp) = test_server_persistent();
         server
             .delete("/jobs/0")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .await;
         let on_disk = std::fs::read_to_string(tmp.path().join("config.yaml")).unwrap();

@@ -121,27 +121,6 @@ async fn force_json(mut req: Request, next: Next) -> Response {
     next.run(req).await
 }
 
-// Custom headers (like HX-Request) cannot be sent cross-origin without a CORS preflight
-// that the server must explicitly allow. Requiring this header for all UI mutations
-// blocks cross-site form submissions without a per-request token.
-async fn csrf_check(req: Request, next: Next) -> Response {
-    let is_mutation = matches!(req.method().as_str(), "POST" | "PUT" | "PATCH" | "DELETE");
-    let is_scanner = req.uri().path().starts_with("/NmWebService/");
-
-    let is_auth = req.uri().path() == "/login";
-    if is_mutation && !is_scanner && !is_auth {
-        let hx = req
-            .headers()
-            .get("hx-request")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if !hx.eq_ignore_ascii_case("true") && !admin::secure_origin(req.headers()) {
-            return StatusCode::FORBIDDEN.into_response();
-        }
-    }
-    next.run(req).await
-}
-
 async fn admin_origin_check(req: Request, next: Next) -> Response {
     if matches!(req.method().as_str(), "POST" | "PUT" | "PATCH" | "DELETE")
         && !admin::secure_origin(req.headers())
@@ -467,7 +446,6 @@ pub fn admin_router(state: AppState) -> Router {
 pub fn admin_router_with_hosts(state: AppState, allowed_hosts: Vec<String>) -> Router {
     admin_routes()
         .layer(middleware::from_fn(admin_origin_check))
-        .layer(middleware::from_fn(csrf_check))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             admin_session_gate,
@@ -495,30 +473,18 @@ pub fn scanner_router(state: AppState) -> Router {
 }
 
 #[cfg(test)]
-pub fn router(state: AppState) -> Router {
-    admin_routes()
-        .merge(scanner_routes())
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            scanner_session_gate,
-        ))
-        .layer(middleware::from_fn(force_json))
-        .layer(middleware::from_fn(csrf_check))
-        .layer(middleware::from_fn(browser_security_headers))
-        .layer(DefaultBodyLimit::max(34 * 1024 * 1024))
-        .layer(middleware::from_fn(request_log))
-        .with_state(state)
-}
+pub(crate) mod test_support;
 
 #[cfg(test)]
 mod tests {
+    use crate::routes::test_support::TestApp;
     use axum_test::TestServer;
     use serde_json::json;
 
     use crate::config::{Config, Job};
     use crate::state::AppState;
 
-    fn test_server() -> (TestServer, tempfile::TempDir) {
+    fn test_server() -> (TestApp, tempfile::TempDir) {
         let tmp = tempfile::TempDir::new().unwrap();
         let config = Config {
             jobs: vec![Job {
@@ -532,7 +498,71 @@ mod tests {
             }],
             ..Default::default()
         };
-        (TestServer::new(super::router(AppState::new(config))), tmp)
+        (TestApp::new(AppState::new(config)), tmp)
+    }
+
+    #[tokio::test]
+    async fn protected_mutations_require_session_and_same_origin() {
+        let root = tempfile::tempdir().unwrap();
+        let auth = crate::admin_auth::AdminAuth::open(root.path(), &[0x42; 32]).unwrap();
+        let session = auth.test_session();
+        let state = AppState::new(Config::default()).with_admin_auth(auth);
+        let server = TestServer::new(super::admin_router(state));
+        for path in [
+            "/settings",
+            "/settings/language",
+            "/settings/scanner",
+            "/settings/paperless",
+            "/jobs",
+            "/jobs/reorder",
+            "/jobs/0",
+            "/jobs/0/expert",
+            "/logout",
+            "/passkey/stepup/start",
+            "/passkey/stepup/finish",
+            "/passkey/account/add/start",
+            "/passkey/account/add/finish",
+            "/scans/0123456789abcdef0123456789abcdef/complete",
+            "/scans/0123456789abcdef0123456789abcdef/discard",
+            "/scans/0123456789abcdef0123456789abcdef/retry",
+            "/scans/0123456789abcdef0123456789abcdef/assign",
+        ] {
+            assert_eq!(
+                server.post(path).await.status_code(),
+                401,
+                "missing session: {path}"
+            );
+            assert_eq!(
+                server
+                    .post(path)
+                    .add_header("cookie", format!("__Host-nx-admin={session}"))
+                    .add_header("hx-request", "true")
+                    .await
+                    .status_code(),
+                403,
+                "HX alone is insufficient: {path}"
+            );
+            assert_eq!(
+                server
+                    .post(path)
+                    .add_header("cookie", format!("__Host-nx-admin={session}"))
+                    .add_header("origin", "https://attacker.invalid")
+                    .add_header("x-forwarded-proto", "https")
+                    .await
+                    .status_code(),
+                403,
+                "wrong origin: {path}"
+            );
+        }
+        assert_eq!(
+            server
+                .delete("/jobs/0")
+                .add_header("origin", "https://localhost")
+                .add_header("x-forwarded-proto", "https")
+                .await
+                .status_code(),
+            401
+        );
     }
 
     #[tokio::test]
@@ -566,6 +596,8 @@ mod tests {
         std::fs::create_dir_all(&out).unwrap();
         let resp = server
             .post("/jobs")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[
                 ("name", "FormJob"),
@@ -582,22 +614,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_csrf_ui_mutation_without_hx_request_is_forbidden() {
-        // POST to UI route without HX-Request header must be rejected with 403.
-        // This prevents cross-site form submissions — custom headers are blocked by CORS.
+    async fn test_admin_mutation_without_matching_origin_is_forbidden() {
         let (server, _tmp) = test_server();
-        let resp = server
+        let response = server
             .post("/settings")
+            .add_header("origin", "https://attacker.invalid")
+            .add_header("x-forwarded-proto", "https")
             .form(&[("archive_after_days", "7"), ("delete_after_days", "30")])
             .await;
-        assert_eq!(resp.status_code(), 403);
+        assert_eq!(response.status_code(), 403);
     }
 
     #[tokio::test]
-    async fn test_csrf_ui_mutation_with_hx_request_is_allowed() {
+    async fn test_htmx_does_not_replace_matching_origin() {
         let (server, _tmp) = test_server();
         let resp = server
             .post("/settings")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[("archive_after_days", "7"), ("delete_after_days", "30")])
             .await;
@@ -605,7 +639,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_csrf_scanner_route_not_affected() {
+    async fn test_scanner_router_accepts_requests_without_admin_origin() {
         // Scanner routes must work without HX-Request (scanner doesn't use HTMX).
         let (server, _tmp) = test_server();
         let resp = server
@@ -616,8 +650,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_csrf_get_request_not_affected() {
-        // CSRF guard must not block safe (idempotent) GET requests.
+    async fn test_authenticated_get_does_not_require_origin() {
+        // The real admin router requires a session for GET, but no Origin header.
         let (server, _tmp) = test_server();
         assert_eq!(server.get("/settings").await.status_code(), 200);
     }
@@ -684,6 +718,8 @@ mod tests {
         assert_eq!(
             server
                 .post("/settings")
+                .add_header("origin", "https://localhost")
+                .add_header("x-forwarded-proto", "https")
                 .add_header("hx-request", "true")
                 .await
                 .status_code(),
@@ -769,8 +805,16 @@ mod tests {
     #[tokio::test]
     async fn language_cookie_localizes_each_request_independently() {
         let (server, _tmp) = test_server();
-        let english = server.get("/").add_header("cookie", "ui_lang=en");
-        let german = server.get("/").add_header("cookie", "ui_lang=de");
+        let english = server
+            .get("/")
+            .clear_headers()
+            .add_header("host", "localhost")
+            .add_header("cookie", server.cookie("ui_lang=en"));
+        let german = server
+            .get("/")
+            .clear_headers()
+            .add_header("host", "localhost")
+            .add_header("cookie", server.cookie("ui_lang=de"));
         let (english, german) = tokio::join!(english, german);
         assert!(english.text().contains("<html lang=\"en\">"));
         assert!(english.text().contains("Recent Scans"));

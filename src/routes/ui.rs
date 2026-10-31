@@ -438,7 +438,7 @@ mod tests {
     use axum_test::TestServer;
 
     use crate::config::{Config, Job};
-    use crate::routes::router;
+    use crate::routes::test_support::TestApp;
     use crate::state::AppState;
 
     #[test]
@@ -516,7 +516,7 @@ mod tests {
         assert!(!super::paperless_needs_attention(&meta));
     }
 
-    fn test_server() -> (TestServer, tempfile::TempDir) {
+    fn test_server() -> (TestApp, tempfile::TempDir) {
         let tmp = tempfile::TempDir::new().unwrap();
         let config = Config {
             jobs: vec![Job {
@@ -530,7 +530,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        (TestServer::new(router(AppState::new(config))), tmp)
+        (TestApp::new(AppState::new(config)), tmp)
     }
 
     #[test]
@@ -601,7 +601,7 @@ mod tests {
             Some(503),
         );
         let state = AppState::new(Config::default()).with_event_log(journal);
-        let admin = TestServer::new(router(state.clone()));
+        let admin = TestApp::new(state.clone());
         let html = admin.get("/events").await.text();
         assert!(html.contains("paperless.delivery_failed"));
         assert!(html.contains("503"));
@@ -633,16 +633,18 @@ mod tests {
             let batch =
                 crate::batch::Batch::create(&job, crate::batch::ScannerInfo::default()).unwrap();
             let detail_url = format!("/scans/{}", batch.id);
-            let server = TestServer::new(router(AppState::new(Config {
+            let server = TestApp::new(AppState::new(Config {
                 jobs: vec![job],
                 ..Default::default()
-            })));
+            }));
 
             for (lang, label) in [("de", german), ("en", english)] {
                 for path in ["/", "/jobs", detail_url.as_str()] {
                     let html = server
                         .get(path)
-                        .add_header("cookie", format!("ui_lang={lang}"))
+                        .clear_headers()
+                        .add_header("host", "localhost")
+                        .add_header("cookie", server.cookie(&format!("ui_lang={lang}")))
                         .await
                         .text();
                     assert!(html.contains(label), "missing {label} on {path}");
@@ -689,7 +691,7 @@ mod tests {
         assert!(body.contains("online"));
     }
 
-    fn server_with_source(source: &str) -> (TestServer, tempfile::TempDir) {
+    fn server_with_source(source: &str) -> (TestApp, tempfile::TempDir) {
         let tmp = tempfile::TempDir::new().unwrap();
         let config = Config {
             jobs: vec![Job {
@@ -713,7 +715,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        (TestServer::new(router(AppState::new(config))), tmp)
+        (TestApp::new(AppState::new(config)), tmp)
     }
 
     #[tokio::test]

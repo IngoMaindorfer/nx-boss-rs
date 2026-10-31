@@ -169,14 +169,13 @@ pub async fn scans_file(
 
 #[cfg(test)]
 mod tests {
-    use axum_test::TestServer;
     use serde_json::{Value, json};
 
     use crate::config::{Config, Job};
-    use crate::routes::router;
+    use crate::routes::test_support::TestApp;
     use crate::state::AppState;
 
-    fn test_server() -> (TestServer, tempfile::TempDir) {
+    fn test_server() -> (TestApp, tempfile::TempDir) {
         let tmp = tempfile::TempDir::new().unwrap();
         let config = Config {
             jobs: vec![Job {
@@ -190,7 +189,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        (TestServer::new(router(AppState::new(config))), tmp)
+        (TestApp::new(AppState::new(config)), tmp)
     }
 
     #[tokio::test]
@@ -367,10 +366,10 @@ mod tests {
             .unwrap();
         batch.complete().unwrap();
         let id = batch.id.clone();
-        let server = TestServer::new(router(AppState::new(Config {
+        let server = TestApp::new(AppState::new(Config {
             jobs: vec![job],
             ..Default::default()
-        })));
+        }));
         let page = server.get(&format!("/scans/{id}")).await.text();
         assert!(page.contains("Paperless"));
         assert!(page.contains("wartet"));
@@ -403,10 +402,10 @@ mod tests {
         metadata["paperless"]["task_id"] = json!("6f421a77-2013-4a1b-a42f-e5b763d80126");
         metadata["paperless"]["upload_attempts"] = json!(2);
         crate::atomic_file::write(&path, &serde_json::to_vec(&metadata).unwrap()).unwrap();
-        let server = TestServer::new(router(AppState::new(Config {
+        let server = TestApp::new(AppState::new(Config {
             jobs: vec![job],
             ..Default::default()
-        })));
+        }));
         let dashboard = server.get("/").await.text();
         assert!(dashboard.contains("Paperless-Importe brauchen Prüfung: 1"));
         let list = server.get("/scans").await.text();
