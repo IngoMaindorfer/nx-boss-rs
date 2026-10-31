@@ -34,6 +34,8 @@ struct ScansDetailTpl {
     files: Vec<String>,
     completed: bool,
     corrupt: bool,
+    can_complete: bool,
+    can_discard: bool,
     delivery_pending: bool,
     scanner_model: Option<String>,
     scanner_serial: Option<String>,
@@ -80,6 +82,7 @@ pub async fn scans_detail(Path(batch_id): Path<String>, UiState(state): UiState)
         return StatusCode::NOT_FOUND.into_response();
     };
     let (meta, corrupt) = super::ui::scan_metadata(&dir);
+    let allowed = crate::recovery::permissions(&meta, corrupt, &dir, chrono::Utc::now());
     let files: Vec<String> = meta.files.iter().map(|f| f.filename.clone()).collect();
     let paperless_status = paperless_status(&meta, state.translations);
     let paperless_error = meta.paperless.as_ref().and_then(|p| p.last_error.clone());
@@ -103,6 +106,8 @@ pub async fn scans_detail(Path(batch_id): Path<String>, UiState(state): UiState)
         files,
         completed: meta.completed,
         corrupt,
+        can_complete: allowed.complete,
+        can_discard: allowed.discard,
         delivery_pending: meta
             .paperless
             .as_ref()
@@ -466,6 +471,13 @@ mod recovery_action_tests {
         };
         let first = Batch::create(&job, ScannerInfo::default()).unwrap();
         let second = Batch::create(&job, ScannerInfo::default()).unwrap();
+        for id in [&first.id, &second.id] {
+            let path = root.path().join(id).join("metadata.json");
+            let mut meta: crate::batch::BatchMetadata =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            meta.created_at = (chrono::Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
+            std::fs::write(path, serde_json::to_vec(&meta).unwrap()).unwrap();
+        }
         let auth = AdminAuth::open(auth_dir.path(), &[0x42; 32]).unwrap();
         let session = auth.test_session();
         let state = AppState::new(Config {
@@ -520,6 +532,10 @@ pub struct RecoveryForm {
     document_id: String,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("passkey confirmation required")]
+struct RecoveryUnauthorized;
+
 pub async fn recover(
     Path((id, action)): Path<(String, String)>,
     UiState(state): UiState,
@@ -537,9 +553,10 @@ pub async fn recover(
     if !super::admin::secure_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    if !super::admin_cookie(&headers).is_some_and(|session| auth.consume_passkey_stepup(session)) {
+    let Some(session) = super::admin_cookie(&headers).map(str::to_owned) else {
         return StatusCode::UNAUTHORIZED.into_response();
-    }
+    };
+    let auth = auth.clone();
     if action == "retry" && form.confirm_duplicate != "yes" {
         return StatusCode::BAD_REQUEST.into_response();
     }
@@ -567,12 +584,21 @@ pub async fn recover(
         let existing = crate::lock!(task.batches).get(&batch_id).cloned();
         if discard {
             let _active = existing.as_ref().map(|batch| crate::lock!(batch));
+            let (meta, corrupt) = super::ui::scan_metadata(&dir);
+            anyhow::ensure!(
+                crate::recovery::permissions(&meta, corrupt, &dir, chrono::Utc::now()).discard,
+                "scan cannot be discarded in this state"
+            );
+            if !auth.consume_passkey_stepup(&session) {
+                return Err(RecoveryUnauthorized.into());
+            }
             let parent = dir.parent().expect("batch has parent");
             let tomb = parent.join(format!(".discarded-{batch_id}"));
             std::fs::rename(&dir, &tomb)?;
             crate::atomic_file::sync_dir(parent)?;
             std::fs::remove_dir_all(tomb)?;
             crate::atomic_file::sync_dir(parent)?;
+            drop(_active);
             crate::lock!(task.batches).remove(&batch_id);
             return Ok(());
         }
@@ -586,16 +612,39 @@ pub async fn recover(
                     break;
                 }
             }
-            let recovered = std::sync::Arc::new(std::sync::Mutex::new(
+            std::sync::Arc::new(std::sync::Mutex::new(
                 found.ok_or_else(|| anyhow::anyhow!("scan not found"))?,
-            ));
-            crate::lock!(task.batches)
-                .entry(batch_id.clone())
-                .or_insert(recovered)
-                .clone()
+            ))
         };
         {
             let mut saved = crate::lock!(batch);
+            if action == "complete" {
+                let corrupt = crate::batch::Batch::inspect_directory(&dir).is_err();
+                anyhow::ensure!(
+                    crate::recovery::permissions(
+                        saved.metadata(),
+                        corrupt,
+                        &dir,
+                        chrono::Utc::now()
+                    )
+                    .complete,
+                    "scan is active or complete"
+                );
+            } else {
+                anyhow::ensure!(
+                    saved.metadata().completed
+                        && saved
+                            .metadata()
+                            .paperless
+                            .as_ref()
+                            .is_some_and(|r| r.document_id.is_none()),
+                    "no pending delivery"
+                );
+            }
+            if !auth.consume_passkey_stepup(&session) {
+                return Err(RecoveryUnauthorized.into());
+            }
+
             match action.as_str() {
                 "complete" => saved.complete()?,
                 "retry" => saved.retry_paperless()?,
@@ -625,6 +674,9 @@ pub async fn recover(
             format!("/scans/{id}")
         })
         .into_response(),
+        Ok(Err(error)) if error.is::<RecoveryUnauthorized>() => {
+            StatusCode::UNAUTHORIZED.into_response()
+        }
         _ => {
             let message = if state.translations.code == "de" {
                 "Aktion fehlgeschlagen. Beschädigte Scandaten bitte prüfen oder verwerfen; für erneutes Senden die Duplikatwarnung bestätigen."
@@ -838,5 +890,123 @@ mod delivery_recovery_tests {
             303
         );
         assert!(!crate::paperless::pending_delivery_exists(&[job]).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod idle_recovery_tests {
+    use crate::{
+        admin_auth::AdminAuth,
+        batch::{Batch, ScannerInfo},
+        config::{Config, Job},
+        state::AppState,
+    };
+    use serde_json::json;
+    fn fixture(
+        age_hours: i64,
+        completed: bool,
+    ) -> (
+        tempfile::TempDir,
+        AppState,
+        AdminAuth,
+        String,
+        axum_test::TestServer,
+        String,
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        let job = Job {
+            output_path: root.path().into(),
+            consume_path: None,
+            job_info: json!({"name":"test","job_id":0}),
+            scan_settings: json!({}),
+        };
+        let batch = Batch::create(&job, ScannerInfo::default()).unwrap();
+        let mut meta = batch.metadata().clone();
+        meta.created_at = (chrono::Utc::now() - chrono::Duration::hours(age_hours)).to_rfc3339();
+        meta.completed = completed;
+        std::fs::write(
+            root.path().join(&batch.id).join("metadata.json"),
+            serde_json::to_vec(&meta).unwrap(),
+        )
+        .unwrap();
+        let auth = AdminAuth::open(root.path(), &[0x42; 32]).unwrap();
+        let session = auth.test_session();
+        let state = AppState::new(Config {
+            jobs: vec![job],
+            ..Default::default()
+        })
+        .with_admin_auth(auth.clone());
+        let server = axum_test::TestServer::new(crate::routes::admin_router(state.clone()));
+        (root, state, auth, session, server, batch.id)
+    }
+    #[tokio::test]
+    async fn latest_page_activity_controls_recovery_and_buttons() {
+        let (_root, state, auth, session, server, id) = fixture(2, false);
+        let batch = crate::lock!(state.batches).get(&id).cloned().unwrap();
+        crate::lock!(batch)
+            .add_file(
+                "page.jpg",
+                include_bytes!("../../tests/fixtures/scan_page.jpg"),
+                json!({}),
+            )
+            .unwrap();
+        auth.test_confirm_stepup(&session);
+        let page = server
+            .get(&format!("/scans/{id}"))
+            .add_header("cookie", format!("__Host-nx-admin={session}"))
+            .await
+            .text();
+        assert!(!page.contains(&format!("action=\"/scans/{id}/complete\"")));
+        assert!(!page.contains(&format!("action=\"/scans/{id}/discard\"")));
+        let response = server
+            .post(&format!("/scans/{id}/complete"))
+            .add_header("cookie", format!("__Host-nx-admin={session}"))
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
+            .form(&[("unused", "")])
+            .await;
+        assert_eq!(response.status_code(), 409);
+        assert!(auth.consume_passkey_stepup(&session));
+    }
+
+    #[tokio::test]
+    async fn recent_and_completed_batches_reject_recovery_without_spending_confirmation() {
+        for (age, completed, action) in [
+            (0, false, "complete"),
+            (0, false, "discard"),
+            (2, true, "complete"),
+            (2, true, "discard"),
+        ] {
+            let (root, state, auth, session, server, id) = fixture(age, completed);
+            auth.test_confirm_stepup(&session);
+            let response = server
+                .post(&format!("/scans/{id}/{action}"))
+                .add_header("cookie", format!("__Host-nx-admin={session}"))
+                .add_header("origin", "https://localhost")
+                .add_header("x-forwarded-proto", "https")
+                .form(&[("unused", "")])
+                .await;
+            assert_eq!(response.status_code(), 409, "{age}/{completed}/{action}");
+            assert!(root.path().join(&id).is_dir());
+            assert!(auth.consume_passkey_stepup(&session));
+            drop(state);
+        }
+    }
+    #[tokio::test]
+    async fn busy_pdf_slot_preserves_confirmation_for_idle_recovery_retry() {
+        let (_root, state, auth, session, server, id) = fixture(2, false);
+        auth.test_confirm_stepup(&session);
+        let permit = state.pdf_slots.clone().acquire_owned().await.unwrap();
+        let request = || {
+            server
+                .post(&format!("/scans/{id}/complete"))
+                .add_header("cookie", format!("__Host-nx-admin={session}"))
+                .add_header("origin", "https://localhost")
+                .add_header("x-forwarded-proto", "https")
+                .form(&[("unused", "")])
+        };
+        assert_eq!(request().await.status_code(), 503);
+        drop(permit);
+        assert_eq!(request().await.status_code(), 303);
     }
 }

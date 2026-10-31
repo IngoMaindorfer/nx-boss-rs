@@ -1,13 +1,12 @@
 use axum::{
     Json,
     extract::{Multipart, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use serde_json::{Value, json};
 use tracing::{info, warn};
 
-use super::scanner;
 use crate::batch::{PathTraversalError, UploadError};
 use crate::lock;
 use crate::state::AppState;
@@ -26,10 +25,7 @@ fn bad_request(msg: impl std::fmt::Display) -> Response {
         .into_response()
 }
 
-async fn parse_multipart(
-    mut multipart: Multipart,
-    headers: &HeaderMap,
-) -> Result<ParsedImage, Box<Response>> {
+async fn parse_multipart(mut multipart: Multipart) -> Result<ParsedImage, Box<Response>> {
     fn multipart_error(message: impl std::fmt::Display) -> Box<Response> {
         Box::new(bad_request(message))
     }
@@ -63,12 +59,6 @@ async fn parse_multipart(
                     return Err(multipart_error(e));
                 }
             },
-            Some("imageparameter") => {
-                let bytes = field.bytes().await.map_err(multipart_error)?;
-                if bytes.len() <= 16 * 1024 {
-                    scanner::log_scan_bytes_probe("imageparameter", headers, &bytes);
-                }
-            }
             _ => {
                 field.bytes().await.map_err(multipart_error)?;
             }
@@ -113,19 +103,14 @@ async fn parse_multipart(
     })
 }
 
-pub async fn post_image(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    multipart: Multipart,
-) -> impl IntoResponse {
+pub async fn post_image(State(state): State<AppState>, multipart: Multipart) -> impl IntoResponse {
     let Ok(_slot) = state.upload_slots.clone().try_acquire_owned() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    let parsed = match parse_multipart(multipart, &headers).await {
+    let parsed = match parse_multipart(multipart).await {
         Ok(p) => p,
         Err(r) => return *r,
     };
-    scanner::log_scan_json_probe("image_parameter", &headers, &parsed.parameters);
 
     let batch_id = match parsed.parameters["batch_id"].as_str() {
         Some(id) => id.to_string(),

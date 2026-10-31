@@ -142,8 +142,12 @@ fn admin_cookie(headers: &axum::http::HeaderMap) -> Option<&str> {
     cookie_value(headers, "__Host-nx-admin")
 }
 
-async fn admin_session_gate(State(state): State<AppState>, req: Request, next: Next) -> Response {
-    let path = req.uri().path();
+async fn admin_session_gate(
+    State(state): State<AppState>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    let path = req.uri().path().to_owned();
     if path.starts_with("/NmWebService/") {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -153,33 +157,99 @@ async fn admin_session_gate(State(state): State<AppState>, req: Request, next: N
     let Some(ref auth) = state.admin_auth else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    if !auth.configured() {
+    let configured = auth.configured();
+    let valid = admin_cookie(req.headers()).is_some_and(|token| auth.session_valid(token));
+    let trust = cookie_value(req.headers(), "__Host-nx-trust").map(str::to_owned);
+    let mut clear_trust = trust
+        .as_ref()
+        .is_some_and(|token| !auth.trusted_cookie_valid(token));
+    let mut restored = None;
+    if configured
+        && !valid
+        && req.method() == axum::http::Method::GET
+        && !clear_trust
+        && let Some(token) = trust.as_ref()
+    {
+        match auth.restore_trusted_session(token) {
+            Ok(Some(session)) => {
+                let mut parts: Vec<String> = req
+                    .headers()
+                    .get_all(header::COOKIE)
+                    .iter()
+                    .filter_map(|h| h.to_str().ok())
+                    .flat_map(|h| h.split(';'))
+                    .filter(|part| {
+                        part.trim()
+                            .split_once('=')
+                            .is_none_or(|(name, _)| name != "__Host-nx-admin")
+                    })
+                    .map(|p| p.trim().to_owned())
+                    .collect();
+                parts.push(format!("__Host-nx-admin={session}"));
+                req.headers_mut().remove(header::COOKIE);
+                req.headers_mut().insert(
+                    header::COOKIE,
+                    HeaderValue::from_str(&parts.join("; ")).expect("valid cookie header"),
+                );
+                restored = Some(session);
+            }
+            Ok(None) => clear_trust = true,
+            Err(_) => {
+                tracing::warn!(
+                    event = "admin.trust_restore_failed",
+                    error_class = "storage",
+                    "trusted session unavailable; passkey required"
+                );
+                clear_trust = true;
+            }
+        }
+    }
+    let mut response = if !configured {
         if matches!(
-            path,
+            path.as_str(),
             "/setup" | "/passkey/setup/start" | "/passkey/setup/finish"
         ) {
-            return next.run(req).await;
-        }
-        return if req.method() == axum::http::Method::GET {
+            next.run(req).await
+        } else if req.method() == axum::http::Method::GET {
             Redirect::to("/setup").into_response()
         } else {
             StatusCode::UNAUTHORIZED.into_response()
-        };
-    }
-    if matches!(
-        path,
+        }
+    } else if matches!(
+        path.as_str(),
         "/login" | "/passkey/login/start" | "/passkey/login/finish"
     ) {
-        return next.run(req).await;
-    }
-    if admin_cookie(req.headers()).is_some_and(|token| auth.session_valid(token)) {
-        return next.run(req).await;
-    }
-    if req.method() == axum::http::Method::GET {
+        if path == "/login" && restored.is_some() {
+            Redirect::to("/").into_response()
+        } else {
+            next.run(req).await
+        }
+    } else if valid || restored.is_some() {
+        next.run(req).await
+    } else if req.method() == axum::http::Method::GET {
         Redirect::to("/login").into_response()
     } else {
         StatusCode::UNAUTHORIZED.into_response()
+    };
+    if let Some(session) = restored {
+        response.headers_mut().append(
+            header::SET_COOKIE,
+            HeaderValue::from_str(&admin::session_cookie(&session)).expect("session cookie"),
+        );
     }
+    if clear_trust
+        && !response
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .any(|v| v.to_str().is_ok_and(|v| v.starts_with("__Host-nx-trust=")))
+    {
+        response.headers_mut().append(
+            header::SET_COOKIE,
+            HeaderValue::from_static(admin::clear_trust_cookie()),
+        );
+    }
+    response
 }
 
 pub(super) fn scanner_bearer(headers: &axum::http::HeaderMap) -> Option<&str> {
@@ -193,15 +263,6 @@ pub(super) fn scanner_bearer(headers: &axum::http::HeaderMap) -> Option<&str> {
 
 async fn scanner_session_gate(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let path = req.uri().path();
-    if state.scanner_auth_experiment.is_some()
-        && path.starts_with("/NmWebService/")
-        && !matches!(
-            path,
-            "/NmWebService/heartbeat" | "/NmWebService/device" | "/NmWebService/authorization"
-        )
-    {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
     if state.scanner_auth_mode.requires_login()
         && path.starts_with("/NmWebService/")
         && !matches!(
@@ -378,6 +439,11 @@ fn admin_routes() -> Router<AppState> {
         .route(
             "/passkey/account/add/finish",
             post(admin::passkey_add_finish),
+        )
+        .route("/account/trusted/remove", post(admin::trusted_remove))
+        .route(
+            "/account/trusted/remove-all",
+            post(admin::trusted_remove_all),
         )
         .route("/logout", post(admin::logout_post))
         .route("/setup", get(admin::setup_get))
@@ -599,6 +665,8 @@ mod tests {
             "/passkey/account/add/start",
             "/passkey/account/add/finish",
             "/passkey/account/remove",
+            "/account/trusted/remove",
+            "/account/trusted/remove-all",
             "/scans/0123456789abcdef0123456789abcdef/complete",
             "/scans/0123456789abcdef0123456789abcdef/discard",
             "/scans/0123456789abcdef0123456789abcdef/retry",
@@ -913,5 +981,100 @@ mod tests {
         );
         let unsafe_response = server.get("/language/de?next=%2F%2Fevil.example").await;
         assert_eq!(unsafe_response.headers()["location"], "/");
+    }
+}
+
+#[cfg(test)]
+mod trusted_route_tests {
+    use super::*;
+    use crate::{admin_auth::AdminAuth, config::Config};
+    use axum_test::TestServer;
+    #[tokio::test]
+    async fn trust_restores_get_only_and_never_supplies_confirmation() {
+        let root = tempfile::tempdir().unwrap();
+        let auth = AdminAuth::open(root.path(), &[0x42; 32]).unwrap();
+        let original = auth.test_session();
+        let trust = auth.trust_device(&original, "Laptop").unwrap();
+        let server = TestServer::new(admin_router(
+            AppState::new(Config::default()).with_admin_auth(auth.clone()),
+        ));
+        let cookie = format!("__Host-nx-trust={trust}");
+        let post = server
+            .post("/settings/language")
+            .add_header("cookie", &cookie)
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
+            .form(&[("lang", "en")])
+            .await;
+        assert_eq!(post.status_code(), 401);
+        let get = server.get("/account").add_header("cookie", &cookie).await;
+        assert_eq!(get.status_code(), 200);
+        assert!(get.text().contains("Dieses Gerät"));
+        assert!(!get.text().contains(&trust));
+        let session = get
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .find_map(|v| v.strip_prefix("__Host-nx-admin="))
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+        assert!(auth.session_valid(session));
+        assert!(!auth.consume_passkey_stepup(session));
+        for route in ["/account/trusted/remove", "/account/trusted/remove-all"] {
+            let denied = server
+                .post(route)
+                .add_header("cookie", format!("__Host-nx-admin={session}; {cookie}"))
+                .add_header("origin", "https://localhost")
+                .add_header("x-forwarded-proto", "https")
+                .json(&serde_json::json!({"device_id":auth.trusted_devices(None)[0].id}))
+                .await;
+            assert_eq!(denied.status_code(), 401);
+        }
+        auth.test_confirm_stepup(&original);
+        assert!(auth.revoke_trusted_devices(&original, None).unwrap());
+        assert!(!auth.session_valid(session));
+        let revoked = server.get("/account").add_header("cookie", &cookie).await;
+        assert_eq!(revoked.status_code(), 303);
+        assert!(
+            revoked
+                .headers()
+                .get_all(header::SET_COOKIE)
+                .iter()
+                .any(|v| v
+                    .to_str()
+                    .is_ok_and(|v| v.starts_with("__Host-nx-trust=;") && v.contains("Max-Age=0")))
+        );
+    }
+    #[tokio::test]
+    async fn unknown_trust_cookie_is_cleared_even_with_valid_session() {
+        let root = tempfile::tempdir().unwrap();
+        let auth = AdminAuth::open(root.path(), &[0x42; 32]).unwrap();
+        let session = auth.test_session();
+        let server = TestServer::new(admin_router(
+            AppState::new(Config::default()).with_admin_auth(auth),
+        ));
+        let response = server
+            .get("/account")
+            .add_header(
+                "cookie",
+                format!(
+                    "__Host-nx-admin={session}; __Host-nx-trust={}",
+                    "f".repeat(64)
+                ),
+            )
+            .await;
+        assert_eq!(response.status_code(), 200);
+        assert!(
+            response
+                .headers()
+                .get_all(header::SET_COOKIE)
+                .iter()
+                .any(|v| v
+                    .to_str()
+                    .is_ok_and(|v| v.contains("__Host-nx-trust=;") && v.contains("Max-Age=0")))
+        );
     }
 }

@@ -72,3 +72,21 @@ and HSTS on Caddy TLS listeners. Tests now exercise the separate production
 routers. Recovery actions require fresh one-use passkey confirmation. See the
 [review answers](review-2026-10-31.md) for per-finding tests and commits and the
 [deployment handoff](deployment-review-2026-10-31.md) for operator-only checks.
+
+
+## Optional trusted Admin devices (31 October addendum)
+
+A verified passkey login can explicitly enroll a device for a fixed 30 days.
+A Secure/HttpOnly/SameSite=Strict host cookie carries the random bearer; only its
+SHA-256 hash is persisted in a private atomic file. GET page visits alone restore
+normal sessions, with no step-up. Existing passkey-confirmed actions retain that
+requirement; B20 stays rejected. Revoking a device ends associated sessions,
+removing a passkey revokes all devices, and logout revokes the current device.
+Missing/corrupt device state falls back to passkey login with a redacted warning.
+
+An unlocked trusted device permits reading scans and changing jobs and retention
+periods. Recommend enrollment only on personal devices with a lock screen. This
+residual risk is inherent in the explicitly requested convenience feature; the
+fixed lifetime is not extended by use and cannot be configured. A copied bearer
+cookie must be revoked under `/account`. Backup restoration must not silently
+reintroduce previously revoked authentication state.

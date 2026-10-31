@@ -141,6 +141,9 @@ pub(super) fn scan_metadata(path: &std::path::Path) -> (BatchMetadata, bool) {
     match crate::batch::Batch::inspect_directory(path) {
         Ok(meta) => (meta, false),
         Err(_) => {
+            if let Ok(meta) = crate::batch::Batch::read_metadata(path) {
+                return (meta, true);
+            }
             let created_at = std::fs::metadata(path)
                 .and_then(|m| m.modified())
                 .map(DateTime::<Utc>::from)
