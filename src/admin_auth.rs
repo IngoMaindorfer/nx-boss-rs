@@ -299,6 +299,15 @@ impl AdminAuth {
         issue_session(&mut inner).unwrap()
     }
     #[cfg(test)]
+    pub(crate) fn test_expire_session(&self, token: &str) {
+        crate::lock!(self.inner)
+            .sessions
+            .get_mut(token)
+            .unwrap()
+            .last_seen = Instant::now() - IDLE_LIFETIME - Duration::from_secs(1);
+    }
+
+    #[cfg(test)]
     pub(crate) fn test_confirm_stepup(&self, session: &str) {
         crate::lock!(self.inner)
             .sessions
