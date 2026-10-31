@@ -74,7 +74,7 @@ fn paperless_view(
         token_set: config.is_some_and(|cfg| cfg.token_file.is_some() || !cfg.token_env.is_empty()),
         saved,
         error,
-        lang: security_lang(headers),
+        lang: super::request_lang(state, headers),
     })
 }
 
@@ -82,16 +82,21 @@ pub async fn paperless_get(State(state): State<AppState>, headers: HeaderMap) ->
     paperless_view(&state, &headers, false, None)
 }
 
-fn message(headers: &HeaderMap, de: &'static str, en: &'static str) -> &'static str {
-    if security_lang(headers) == "de" {
+fn message(
+    state: &AppState,
+    headers: &HeaderMap,
+    de: &'static str,
+    en: &'static str,
+) -> &'static str {
+    if super::request_lang(state, headers) == "de" {
         de
     } else {
         en
     }
 }
 
-fn confirmation_expired(headers: &HeaderMap) -> Response {
-    (StatusCode::UNAUTHORIZED, axum::response::Html(message(headers,
+fn confirmation_expired(state: &AppState, headers: &HeaderMap) -> Response {
+    (StatusCode::UNAUTHORIZED, axum::response::Html(message(state, headers,
         "Passkey-Bestätigung fehlt oder ist abgelaufen. Zurück zum Formular und erneut bestätigen.",
         "Passkey confirmation is missing or expired. Return to the form and confirm again."))).into_response()
 }
@@ -117,7 +122,7 @@ pub async fn paperless_post(
     let authorized =
         super::admin_cookie(&headers).is_some_and(|session| auth.consume_passkey_stepup(session));
     if !authorized {
-        return confirmation_expired(&headers);
+        return confirmation_expired(&state, &headers);
     }
     if form.enabled == "yes" {
         let valid_url = reqwest::Url::parse(form.url.trim()).is_ok_and(|url| {
@@ -139,12 +144,14 @@ pub async fn paperless_post(
                 || form.field_id.trim().parse::<u32>().is_ok_and(|id| id > 0));
         let error = if !valid_url {
             Some(message(
+                &state,
                 &headers,
                 "Ungültige Paperless-URL: HTTP(S) ohne Zugangsdaten, Query oder Fragment verwenden.",
                 "Invalid Paperless URL: use HTTP(S) without credentials, query or fragment.",
             ))
         } else if !valid_ids {
             Some(message(
+                &state,
                 &headers,
                 "Ungültige Tag- oder Feld-ID: positive ganze Zahlen verwenden.",
                 "Invalid tag or field ID: use positive integers.",
@@ -206,6 +213,7 @@ pub async fn paperless_post(
                 .is_some() =>
         {
             Some(message(
+                &state,
                 &headers,
                 "Defekte Scanmetadaten blockieren den Zielwechsel. Scanübersicht prüfen.",
                 "Corrupt scan metadata blocks changing the target. Check the scan list.",
@@ -218,12 +226,14 @@ pub async fn paperless_post(
             ) =>
         {
             Some(message(
+                &state,
                 &headers,
                 "Offene Scans oder ausstehende Zustellungen blockieren den Zielwechsel.",
                 "Open scans or pending deliveries block changing the target.",
             ))
         }
         _ => Some(message(
+            &state,
             &headers,
             "Speichern fehlgeschlagen. Token-Konfiguration und privaten Dateispeicher prüfen.",
             "Saving failed. Check the token configuration and private file storage.",
@@ -237,18 +247,6 @@ pub struct ScannerSecurityForm {
     mode: String,
     username: String,
     new_password: String,
-}
-
-fn security_lang(headers: &HeaderMap) -> &'static str {
-    if headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.split(';').any(|part| part.trim() == "ui_lang=en"))
-    {
-        "en"
-    } else {
-        "de"
-    }
 }
 
 fn scanner_security_view(
@@ -270,7 +268,7 @@ fn scanner_security_view(
             .is_some(),
         error,
         saved,
-        lang: security_lang(headers),
+        lang: super::request_lang(state, headers),
     })
 }
 
@@ -295,7 +293,7 @@ pub async fn scanner_security_post(
     let authorized =
         super::admin_cookie(&headers).is_some_and(|session| auth.consume_passkey_stepup(session));
     if !authorized {
-        return confirmation_expired(&headers);
+        return confirmation_expired(&state, &headers);
     }
     let state_for_write = state.clone();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {

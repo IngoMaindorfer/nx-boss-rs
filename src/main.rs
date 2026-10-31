@@ -74,6 +74,7 @@ mod pdf;
 mod retention;
 mod routes;
 mod scanner_auth;
+mod security;
 mod state;
 mod translations;
 
@@ -337,7 +338,13 @@ async fn run(event_log: event_log::EventLog) -> Result<()> {
     paperless_result?;
     retention_result?;
     info!(event = "service.shutdown_complete", "shutdown complete");
-    event_log.flush()?;
+    if event_log.flush().is_err() {
+        warn!(
+            event = "event_log.unavailable",
+            error_class = "storage",
+            "event journal flush failed"
+        );
+    }
     Ok(())
 }
 

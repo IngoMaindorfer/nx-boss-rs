@@ -219,12 +219,16 @@ impl ScannerAuthMode {
         let user_match = payload
             .get("auth_info_user")
             .and_then(serde_json::Value::as_str)
-            .is_some_and(|value| fixed_time_eq(credentials.username.as_bytes(), value.as_bytes()));
+            .is_some_and(|value| {
+                crate::security::constant_time_eq(credentials.username.as_bytes(), value.as_bytes())
+            });
         let pass_match = credentials.password_hash.is_none()
             && payload
                 .get("auth_info_pass")
                 .and_then(serde_json::Value::as_str)
-                .is_some_and(|value| fixed_time_eq(&credentials.password, value.as_bytes()));
+                .is_some_and(|value| {
+                    crate::security::constant_time_eq(&credentials.password, value.as_bytes())
+                });
         (user_match, pass_match)
     }
 
@@ -298,7 +302,9 @@ impl ScannerCredentials {
         let user_match = payload
             .get("auth_info_user")
             .and_then(serde_json::Value::as_str)
-            .is_some_and(|value| fixed_time_eq(self.username.as_bytes(), value.as_bytes()));
+            .is_some_and(|value| {
+                crate::security::constant_time_eq(self.username.as_bytes(), value.as_bytes())
+            });
         let password = payload
             .get("auth_info_pass")
             .and_then(serde_json::Value::as_str)
@@ -306,7 +312,7 @@ impl ScannerCredentials {
         let pass_match = if let Some(ref hash) = self.password_hash {
             verify_password_hash(password, hash, &self.pepper)
         } else {
-            fixed_time_eq(&self.password, password.as_bytes())
+            crate::security::constant_time_eq(&self.password, password.as_bytes())
         };
         (user_match, pass_match)
     }
@@ -346,14 +352,6 @@ pub fn verify_password_hash(password: &str, hash: &str, pepper: &[u8]) -> bool {
         Params::default(),
     )
     .is_ok_and(|hasher| hasher.verify_password(password.as_bytes(), &parsed).is_ok())
-}
-
-fn fixed_time_eq(expected: &[u8], observed: &[u8]) -> bool {
-    let mut difference = expected.len() ^ observed.len();
-    for (&a, &b) in expected.iter().zip(observed) {
-        difference |= usize::from(a ^ b);
-    }
-    difference == 0
 }
 
 #[cfg(test)]

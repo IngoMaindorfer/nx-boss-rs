@@ -130,14 +130,6 @@ pub fn read_pepper(path: &Path) -> Result<Vec<u8>> {
     Ok(pepper)
 }
 
-fn secure_eq(expected: &str, observed: &str) -> bool {
-    let mut diff = expected.len() ^ observed.len();
-    for (a, b) in expected.bytes().zip(observed.bytes()) {
-        diff |= usize::from(a ^ b);
-    }
-    diff == 0
-}
-
 fn prune_passkey_flows(inner: &mut Inner) {
     inner
         .passkey_registrations
@@ -360,10 +352,9 @@ impl AdminAuth {
         }
         let mut inner = crate::lock!(self.inner);
         if inner.passkey_account.is_some()
-            || !inner
-                .setup_token
-                .as_deref()
-                .is_some_and(|expected| secure_eq(expected, token))
+            || !inner.setup_token.as_deref().is_some_and(|expected| {
+                crate::security::constant_time_eq(expected.as_bytes(), token.as_bytes())
+            })
         {
             bail!("invalid admin setup token");
         }
@@ -405,10 +396,9 @@ impl AdminAuth {
         if pending.created.elapsed() >= Duration::from_secs(5 * 60)
             || !matches!(pending.purpose, RegistrationPurpose::Setup)
             || inner.passkey_account.is_some()
-            || !inner
-                .setup_token
-                .as_deref()
-                .is_some_and(|expected| secure_eq(expected, token))
+            || !inner.setup_token.as_deref().is_some_and(|expected| {
+                crate::security::constant_time_eq(expected.as_bytes(), token.as_bytes())
+            })
         {
             bail!("passkey setup expired or unauthorized");
         }

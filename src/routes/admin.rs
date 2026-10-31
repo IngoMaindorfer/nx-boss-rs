@@ -32,18 +32,6 @@ struct AccountTpl {
     passkeys: Vec<crate::admin_auth::PasskeyView>,
 }
 
-fn preferred_lang(headers: &HeaderMap) -> &'static str {
-    if headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|cookie| cookie.split(';').any(|part| part.trim() == "ui_lang=en"))
-    {
-        "en"
-    } else {
-        "de"
-    }
-}
-
 pub(super) fn secure_origin(headers: &HeaderMap) -> bool {
     let Some(host) = headers.get(header::HOST).and_then(|v| v.to_str().ok()) else {
         return false;
@@ -62,9 +50,9 @@ fn session_cookie(token: &str) -> String {
     format!("__Host-nx-admin={token}; Path=/; Secure; HttpOnly; SameSite=Strict")
 }
 
-pub async fn login_get(headers: HeaderMap) -> Response {
+pub async fn login_get(State(state): State<AppState>, headers: HeaderMap) -> Response {
     render(LoginTpl {
-        lang: preferred_lang(&headers),
+        lang: super::request_lang(&state, &headers),
     })
 }
 
@@ -107,7 +95,7 @@ pub async fn passkey_setup_start(
     if form.token.len() > 128 || form.username.len() > 64 {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let Some(auth) = state.admin_auth else {
+    let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     passkey_challenge(auth.start_passkey_setup(&form.token, &form.username, &form.name))
@@ -124,7 +112,7 @@ pub async fn passkey_setup_finish(
     if form.flow.len() != 64 || form.token.len() > 128 {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let Some(auth) = state.admin_auth else {
+    let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     match auth.finish_passkey_setup(&form.flow, &form.token, form.credential) {
@@ -141,7 +129,7 @@ pub async fn passkey_login_start(State(state): State<AppState>, headers: HeaderM
     if !secure_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let Some(auth) = state.admin_auth else {
+    let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     // Only Caddy reaches this listener; Caddy supplies the actual peer in XFF.
@@ -164,7 +152,7 @@ pub async fn passkey_login_finish(
     if form.flow.len() != 64 {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let Some(auth) = state.admin_auth else {
+    let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     match auth.finish_passkey_authentication(&form.flow, None, form.credential) {
@@ -181,7 +169,7 @@ pub async fn passkey_stepup_start(State(state): State<AppState>, headers: Header
     if !secure_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let Some(auth) = state.admin_auth else {
+    let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let Some(session) = super::admin_cookie(&headers) else {
@@ -198,7 +186,7 @@ pub async fn passkey_stepup_finish(
     if !secure_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let Some(auth) = state.admin_auth else {
+    let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let Some(session) = super::admin_cookie(&headers) else {
@@ -218,7 +206,7 @@ pub async fn passkey_add_start(
     if !secure_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let Some(auth) = state.admin_auth else {
+    let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let Some(session) = super::admin_cookie(&headers) else {
@@ -235,7 +223,7 @@ pub async fn passkey_add_finish(
     if !secure_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let Some(auth) = state.admin_auth else {
+    let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let Some(session) = super::admin_cookie(&headers) else {
@@ -272,17 +260,17 @@ pub async fn setup_get(State(state): State<AppState>, headers: HeaderMap) -> Res
         return Redirect::to("/").into_response();
     }
     render(SetupTpl {
-        lang: preferred_lang(&headers),
+        lang: super::request_lang(&state, &headers),
     })
 }
 
 pub async fn account_get(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let Some(auth) = state.admin_auth else {
+    let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     render(AccountTpl {
         username: auth.username().unwrap_or_default(),
-        lang: preferred_lang(&headers),
+        lang: super::request_lang(&state, &headers),
         passkey_count: auth.passkey_count(),
         passkeys: auth.passkeys(),
     })
@@ -308,7 +296,7 @@ pub async fn passkey_remove(
     if form.key_id.len() > 4096 {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let Some(auth) = state.admin_auth else {
+    let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let Some(session) = super::admin_cookie(&headers) else {

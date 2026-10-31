@@ -29,20 +29,7 @@ impl FromRequestParts<AppState> for UiState {
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         let mut localized = state.clone();
-        let cookie_lang = parts
-            .headers
-            .get(header::COOKIE)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|cookies| {
-                cookies.split(';').find_map(|cookie| {
-                    let (name, value) = cookie.trim().split_once('=')?;
-                    (name == "ui_lang" && matches!(value, "de" | "en")).then_some(value)
-                })
-            });
-        let lang = cookie_lang
-            .map(str::to_owned)
-            .unwrap_or_else(|| crate::lock!(state.lang).clone());
-        localized.translations = crate::translations::for_lang(&lang);
+        localized.translations = crate::translations::for_lang(request_lang(state, &parts.headers));
         Ok(Self(localized))
     }
 }
@@ -130,16 +117,29 @@ async fn admin_origin_check(req: Request, next: Next) -> Response {
     next.run(req).await
 }
 
-fn admin_cookie(headers: &axum::http::HeaderMap) -> Option<&str> {
+fn cookie_value<'a>(headers: &'a axum::http::HeaderMap, name: &str) -> Option<&'a str> {
     headers
-        .get(header::COOKIE)?
-        .to_str()
-        .ok()?
-        .split(';')
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|h| h.to_str().ok())
+        .flat_map(|h| h.split(';'))
         .find_map(|part| {
-            let (name, value) = part.trim().split_once('=')?;
-            (name == "__Host-nx-admin" && !value.is_empty()).then_some(value)
+            let (key, value) = part.trim().split_once('=')?;
+            (key == name && !value.is_empty()).then_some(value)
         })
+}
+
+fn request_lang(state: &AppState, headers: &axum::http::HeaderMap) -> &'static str {
+    match cookie_value(headers, "ui_lang") {
+        Some("en") => "en",
+        Some("de") => "de",
+        _ if crate::lock!(state.lang).as_str() == "en" => "en",
+        _ => "de",
+    }
+}
+
+fn admin_cookie(headers: &axum::http::HeaderMap) -> Option<&str> {
+    cookie_value(headers, "__Host-nx-admin")
 }
 
 async fn admin_session_gate(State(state): State<AppState>, req: Request, next: Next) -> Response {
@@ -510,6 +510,50 @@ mod tests {
             ..Default::default()
         };
         (TestApp::new(AppState::new(config)), tmp)
+    }
+
+    #[test]
+    fn language_and_session_parse_separate_cookie_headers() {
+        use super::{admin_cookie, request_lang};
+        use axum::http::{HeaderValue, header};
+        let state = crate::state::AppState::new(Default::default());
+        let mut headers = axum::http::HeaderMap::new();
+        headers.append(
+            header::COOKIE,
+            HeaderValue::from_static("__Host-nx-admin=session"),
+        );
+        headers.append(header::COOKIE, HeaderValue::from_static("ui_lang=en"));
+        assert_eq!(admin_cookie(&headers), Some("session"));
+        assert_eq!(request_lang(&state, &headers), "en");
+    }
+
+    #[tokio::test]
+    async fn security_pages_use_server_language_and_explicit_cookie() {
+        let state = crate::state::AppState::new(crate::config::Config {
+            lang: "en".into(),
+            ..Default::default()
+        });
+        let server = crate::routes::test_support::TestApp::new(state);
+        for path in [
+            "/login",
+            "/account",
+            "/settings/scanner",
+            "/settings/paperless",
+        ] {
+            let response = server.get(path).await;
+            assert!(
+                response.text().contains("lang=\"en\""),
+                "server language ignored on {path}"
+            );
+            let response = server
+                .get(path)
+                .add_header("cookie", server.cookie("ui_lang=de"))
+                .await;
+            assert!(
+                response.text().contains("lang=\"de\""),
+                "cookie ignored on {path}"
+            );
+        }
     }
 
     #[tokio::test]
