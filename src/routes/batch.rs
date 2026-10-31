@@ -1,27 +1,29 @@
 use axum::{
     Json,
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use serde_json::{Value, json};
+use std::sync::{Arc, Mutex};
 use tracing::{info, warn};
 
+use super::scanner;
 use crate::batch::{Batch, ScannerInfo};
 use crate::lock;
 use crate::state::AppState;
 
 pub async fn post_batch(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
+    scanner::log_scan_json_probe("batch", &headers, &body);
     // Scanner may send job_id as integer or string
     let job_id = match body.get("job_id") {
-        Some(Value::Number(n)) => n.as_u64().unwrap_or(0) as usize,
-        Some(Value::String(s)) => match s.parse::<usize>() {
-            Ok(n) => n,
-            Err(_) => {
-                warn!("post_batch: invalid job_id string");
+        Some(Value::Number(n)) => match n.as_u64().and_then(|id| usize::try_from(id).ok()) {
+            Some(id) => id,
+            None => {
                 return (
                     StatusCode::UNPROCESSABLE_ENTITY,
                     Json(json!({ "error": "invalid job_id" })),
@@ -29,8 +31,25 @@ pub async fn post_batch(
                     .into_response();
             }
         },
-        other => {
-            warn!(got = ?other, "post_batch: missing or wrong type for job_id");
+        Some(Value::String(s)) => match s.parse::<usize>() {
+            Ok(n) => n,
+            Err(_) => {
+                warn!(
+                    event = "batch.invalid_job_id",
+                    "post_batch: invalid job_id string"
+                );
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({ "error": "invalid job_id" })),
+                )
+                    .into_response();
+            }
+        },
+        _ => {
+            warn!(
+                event = "batch.invalid_job_id",
+                "post_batch: missing or wrong type for job_id"
+            );
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(json!({ "error": "missing job_id" })),
@@ -41,39 +60,68 @@ pub async fn post_batch(
 
     let job = {
         let jobs = lock!(state.jobs);
-        if job_id >= jobs.len() {
-            warn!(job_id, "post_batch: job_id out of range");
+        let Some(job) = jobs
+            .iter()
+            .find(|j| j.job_info["job_id"].as_u64() == Some(job_id as u64))
+        else {
+            warn!(
+                event = "batch.unknown_job",
+                job_id, "post_batch: job_id out of range"
+            );
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(json!({ "error": "job_id out of range" })),
             )
                 .into_response();
-        }
-        jobs[job_id].clone()
+        };
+        job.clone()
     }; // lock released before I/O
     let scanner = ScannerInfo {
         model: state.scanner.display_model(),
         serial: state.scanner.display_serial(),
     };
-    let job_name = job.job_info["name"].as_str().unwrap_or("?").to_string();
     // Batch::create does create_dir_all + file I/O — run off the async thread.
-    let result = tokio::task::spawn_blocking(move || Batch::create(&job, scanner))
-        .await
-        .expect("spawn_blocking panicked");
+    let create_state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let _change = lock!(create_state.config_change_lock);
+        let paperless_options = lock!(create_state.paperless_config).as_ref().map(|config| {
+            crate::batch::PaperlessUploadOptions {
+                tag_ids: config.tag_ids.clone(),
+                batch_id_field_id: config.batch_id_field_id,
+            }
+        });
+        let mut batch = Batch::create(&job, scanner)?;
+        if let Some(options) = paperless_options {
+            batch.enable_paperless_with_options(options)?;
+        }
+        let id = batch.id.clone();
+        lock!(create_state.batches).insert(id.clone(), Arc::new(Mutex::new(batch)));
+        Ok::<_, anyhow::Error>(id)
+    })
+    .await;
     match result {
-        Ok(batch) => {
-            let id = batch.id.clone();
-            info!(batch_id = %id, job_id, job_name, "batch created");
-            lock!(state.batches).insert(id.clone(), batch);
+        Ok(Ok(id)) => {
+            info!(event = "batch.created", batch_id = %id, job_id, "batch created");
             (StatusCode::OK, Json(json!({ "batch_id": id }))).into_response()
         }
-        Err(e) => {
-            warn!(error = %e, "failed to create batch");
+        Ok(Err(e)) => {
+            warn!(
+                event = "batch.create_failed",
+                error_class = crate::logging::error_class(&e),
+                "failed to create batch"
+            );
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
+                Json(json!({ "error": "failed to create batch" })),
             )
                 .into_response()
+        }
+        Err(_) => {
+            tracing::error!(
+                event = "batch.worker_failed",
+                "batch creation worker failed"
+            );
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
 }
@@ -81,36 +129,53 @@ pub async fn post_batch(
 pub async fn put_batch(
     Path(batch_id): Path<String>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
-    // Remove from map before I/O so the lock is not held during file writes / PDF assembly.
-    let mut batch = match lock!(state.batches).remove(&batch_id) {
+    scanner::log_scan_bytes_probe("batch_complete", &headers, &[]);
+    // A per-batch lock serializes upload and completion without holding the map lock.
+    let batch = match lock!(state.batches).get(&batch_id).cloned() {
         Some(b) => b,
         None => {
-            warn!(batch_id = %batch_id, "put_batch: unknown batch_id");
+            warn!(event = "batch.unknown", "put_batch: unknown batch_id");
             return StatusCode::NOT_FOUND.into_response();
         }
     };
+    let Ok(_slot) = state.pdf_slots.clone().try_acquire_owned() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
     // complete() does PDF assembly + file writes — run off the async thread.
-    let (batch, result) = tokio::task::spawn_blocking(move || {
-        let r = batch.complete();
-        (batch, r)
+    let batch_for_work = batch.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let mut batch = lock!(batch_for_work);
+        batch.complete()
     })
-    .await
-    .expect("spawn_blocking panicked");
+    .await;
     match result {
-        Ok(()) => {
-            info!(batch_id = %batch_id, n_files = batch.metadata().files.len(), "batch completed");
+        Ok(Ok(())) => {
+            let n_files = lock!(batch).metadata().files.len();
+            {
+                let mut batches = lock!(state.batches);
+                if batches
+                    .get(&batch_id)
+                    .is_some_and(|current| Arc::ptr_eq(current, &batch))
+                {
+                    batches.remove(&batch_id);
+                }
+            }
+            info!(event = "batch.completed", batch_id = %crate::logging::safe_batch_id(&batch_id), n_files, "batch completed");
             StatusCode::OK.into_response()
         }
-        Err(e) => {
-            warn!(batch_id = %batch_id, error = %e, "failed to complete batch");
-            // Re-insert so the scanner can retry.
-            lock!(state.batches).insert(batch_id, batch);
+        Ok(Err(e)) => {
+            warn!(event = "batch.complete_failed", batch_id = %crate::logging::safe_batch_id(&batch_id), error_class = crate::logging::error_class(&e), "failed to complete batch");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
+                Json(json!({ "error": "failed to complete batch" })),
             )
                 .into_response()
+        }
+        Err(_) => {
+            tracing::error!(event = "batch.worker_failed", batch_id = %crate::logging::safe_batch_id(&batch_id), "batch completion worker failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
 }
@@ -209,6 +274,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_post_batch_rejects_negative_job_id() {
+        let (server, _tmp) = test_server();
+        let resp = server
+            .post("/NmWebService/batch")
+            .json(&json!({"job_id": -1}))
+            .await;
+        assert_eq!(resp.status_code(), 422);
+    }
+
+    #[tokio::test]
     async fn test_post_batch_no_jobs_configured() {
         let server = empty_server();
         let resp = server
@@ -241,5 +316,37 @@ mod tests {
         // Second PUT on same batch_id must return 404 — batch was removed
         let resp = server.put(&format!("/NmWebService/batch/{batch_id}")).await;
         assert_eq!(resp.status_code(), 404);
+    }
+
+    #[tokio::test]
+    async fn test_put_batch_can_retry_when_pdf_worker_is_busy() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state = AppState::new(Config {
+            jobs: vec![Job {
+                output_path: tmp.path().to_path_buf(),
+                consume_path: None,
+                job_info: json!({"name":"Test", "job_id":0}),
+                scan_settings: json!({}),
+            }],
+            ..Default::default()
+        });
+        let server = TestServer::new(router(state.clone()));
+        let id = create_batch(&server).await;
+        let permit = state.pdf_slots.clone().acquire_owned().await.unwrap();
+        assert_eq!(
+            server
+                .put(&format!("/NmWebService/batch/{id}"))
+                .await
+                .status_code(),
+            503
+        );
+        drop(permit);
+        assert_eq!(
+            server
+                .put(&format!("/NmWebService/batch/{id}"))
+                .await
+                .status_code(),
+            200
+        );
     }
 }

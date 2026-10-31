@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header"><h2>{{ t.nav_events }}</h2></div>
+<p class="muted stats-scope">{{ t.events_scope }}</p>
+{% if !persistence_ok %}<div class="alert-error" role="alert">{{ t.events_persistence_warning }}</div>{% endif %}
+<div class="card">
+  {% if events.is_empty() %}
+  <p class="empty">{{ t.events_empty }}</p>
+  {% else %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>{{ t.col_date }}</th><th>{{ t.col_status }}</th><th>{{ t.events_code }}</th><th>{{ t.events_error_class }}</th><th>{{ t.events_http_status }}</th><th>{{ t.events_batch }}</th></tr></thead>
+      <tbody>
+      {% for entry in events %}
+      <tr>
+        <td><time datetime="{{ entry.timestamp }}">{{ entry.timestamp }}</time></td>
+        <td>{{ entry.level }}</td>
+        <td><code>{{ entry.event }}</code></td>
+        <td>{% if let Some(class) = entry.error_class %}{{ class }}{% else %}—{% endif %}</td>
+        <td>{% if let Some(status) = entry.http_status %}{{ status }}{% else %}—{% endif %}</td>
+        <td>{% if let Some(batch_id) = entry.batch_id %}<a href="/scans/{{ batch_id }}">{{ batch_id }}</a>{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

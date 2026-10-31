@@ -1,0 +1,9 @@
+[advisories]
+# RUSTSEC-2023-0071 (Marvin) concerns RSA private-key operations. nx-boss only
+# uses webauthn-rs-core 0.6.2's COSEKey::verify_signature and public attestation
+# certificate verification (crypto.rs, crypto-glue::x509). RSA private keys stay
+# on authenticators; nx-boss neither signs nor decrypts with RSA. crypto-glue
+# exposes private-key APIs but this dependency path does not call them.
+# Re-evaluate this exception if WebAuthn usage or crypto dependencies change.
+# No upstream fix is available for the resolved rsa version.
+ignore = ["RUSTSEC-2023-0071"]

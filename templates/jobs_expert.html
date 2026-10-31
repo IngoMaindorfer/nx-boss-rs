@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header"><h2>{% if t.code == "de" %}Erweiterte Parameter: {% else %}Advanced settings: {% endif %}{{ name }}</h2></div>
+<div class="card">
+{% if error %}<div class="alert-error" role="alert">{% if t.code == "de" %}Ungültiges JSON oder Scanner-Parameter. Es wurde nichts geändert.{% else %}Invalid JSON or scanner settings. Nothing was changed.{% endif %}</div>{% endif %}
+<p class="muted" style="margin-bottom:1rem">{% if t.code == "de" %}Für Scanner-spezifische Einstellungen. Eine falsche Kombination kann einen Job am Gerät unbrauchbar machen. Der Speicherpfad bleibt unverändert.{% else %}For scanner-specific settings. An invalid combination may make a job unusable on the device. The storage path stays unchanged.{% endif %}</p>
+<form method="post" action="/jobs/{{ job_id }}/expert" hx-boost="true" class="edit-form">
+<div class="field"><label for="job_settings_json">job_settings (JSON)</label><textarea id="job_settings_json" name="job_settings_json" rows="12" spellcheck="false" required>{{ job_settings_json }}</textarea></div>
+<div class="field"><label for="scan_settings_json">scan_settings (JSON)</label><textarea id="scan_settings_json" name="scan_settings_json" rows="20" spellcheck="false" required>{{ scan_settings_json }}</textarea></div>
+<div class="form-actions"><button type="submit" class="btn btn-primary">{{ t.btn_save }}</button><a href="/jobs/{{ job_id }}/edit" class="btn btn-secondary">{{ t.btn_cancel }}</a></div>
+</form></div>
+{% endblock %}

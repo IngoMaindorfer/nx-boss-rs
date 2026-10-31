@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::Result;
 use tracing::{info, warn};
 
-use crate::batch::BatchMetadata;
+use crate::batch::{BatchMetadata, valid_batch_id};
 use crate::config::{Job, RetentionConfig};
 use crate::lock;
 use crate::state::{BatchStore, JobStore};
@@ -19,12 +19,27 @@ pub async fn run_forever(
     jobs: JobStore,
     retention: Arc<Mutex<RetentionConfig>>,
     batches: BatchStore,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     let start = tokio::time::Instant::now() + Duration::from_secs(STARTUP_DELAY_SECS);
     let mut interval = tokio::time::interval_at(start, Duration::from_secs(SWEEP_INTERVAL_SECS));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        interval.tick().await;
+        if *shutdown.borrow() {
+            break;
+        }
+        tokio::select! {
+            _ = interval.tick() => {},
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    break;
+                }
+                continue;
+            }
+        }
+        if *shutdown.borrow() {
+            break;
+        }
         sweep_stale_batches(&batches);
         let jobs_snap = lock!(jobs).clone();
         let cfg = lock!(retention).clone();
@@ -33,8 +48,17 @@ pub async fn run_forever(
         }
         // run_once does heavy fs work (dir scan, zstd compression) — run off the async thread.
         // Log panics and continue; losing one sweep must not kill the background task.
-        if let Err(e) = tokio::task::spawn_blocking(move || run_once(&jobs_snap, &cfg)).await {
-            tracing::error!(error = %e, "retention: run_once panicked — skipping sweep");
+        let sweep_shutdown = shutdown.clone();
+        if tokio::task::spawn_blocking(move || {
+            run_once_impl(&jobs_snap, &cfg, || *sweep_shutdown.borrow());
+        })
+        .await
+        .is_err()
+        {
+            tracing::error!(
+                event = "retention.worker_failed",
+                "retention: run_once panicked — skipping sweep"
+            );
         }
     }
 }
@@ -44,12 +68,17 @@ fn sweep_stale_batches(batches: &BatchStore) {
     let mut map = lock!(batches);
     let before = map.len();
     map.retain(|id, batch| {
+        let batch = match batch.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(err)) => err.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return true,
+        };
         let age_hours = chrono::DateTime::parse_from_rfc3339(batch.created_at())
             .ok()
             .map(|t| now.signed_duration_since(t).num_hours())
             .unwrap_or(0);
         if age_hours >= BATCH_TTL_HOURS {
-            warn!(batch_id = %id, age_hours, "retention: discarding stale in-memory batch");
+            warn!(event = "retention.stale_batch", batch_id = %crate::logging::safe_batch_id(id), age_hours, "retention: discarding stale in-memory batch");
             false
         } else {
             true
@@ -57,18 +86,35 @@ fn sweep_stale_batches(batches: &BatchStore) {
     });
     let removed = before - map.len();
     if removed > 0 {
-        info!(removed, "retention: swept stale in-memory batches");
+        info!(
+            event = "retention.swept",
+            removed, "retention: swept stale in-memory batches"
+        );
     }
 }
 
+#[cfg(test)]
 pub fn run_once(jobs: &[Job], cfg: &RetentionConfig) {
+    run_once_impl(jobs, cfg, || false);
+}
+
+fn run_once_impl(jobs: &[Job], cfg: &RetentionConfig, should_stop: impl Fn() -> bool) {
     let now = chrono::Utc::now();
     for job in jobs {
+        if should_stop() {
+            break;
+        }
         let Ok(entries) = std::fs::read_dir(&job.output_path) else {
-            warn!(path = %job.output_path.display(), "retention: cannot read output_path");
+            warn!(
+                event = "retention.read_failed",
+                "retention: cannot read output_path"
+            );
             continue;
         };
         for entry in entries.flatten() {
+            if should_stop() {
+                break;
+            }
             let path = entry.path();
             let Some(name) = path
                 .file_name()
@@ -77,9 +123,12 @@ pub fn run_once(jobs: &[Job], cfg: &RetentionConfig) {
             else {
                 continue;
             };
-            if name.ends_with(".tar.zst") && path.is_file() {
+            if let Some(batch_id) = name.strip_suffix(".tar.zst")
+                && path.is_file()
+                && valid_batch_id(batch_id)
+            {
                 handle_archive(&path, &name, &job.output_path, cfg, &now);
-            } else if path.is_dir() && name.chars().all(|c| c.is_ascii_hexdigit()) {
+            } else if path.is_dir() && valid_batch_id(&name) {
                 handle_batch_dir(&path, &name, &job.output_path, cfg, &now);
             }
         }
@@ -102,9 +151,11 @@ fn handle_archive(
         match std::fs::remove_file(path) {
             Ok(()) => {
                 let _ = std::fs::remove_file(output_path.join(format!("{batch_id}.meta")));
-                info!(batch_id, age_days = age, "retention: deleted archive");
+                info!(event = "retention.archive_deleted", batch_id = %crate::logging::safe_batch_id(batch_id), age_days = age, "retention: deleted archive");
             }
-            Err(e) => warn!(batch_id, error = %e, "retention: failed to delete archive"),
+            Err(_) => {
+                warn!(event = "retention.delete_failed", batch_id = %crate::logging::safe_batch_id(batch_id), "retention: failed to delete archive")
+            }
         }
     }
 }
@@ -125,23 +176,37 @@ fn handle_batch_dir(
     if !meta.completed {
         return;
     }
+    if meta
+        .paperless
+        .as_ref()
+        .is_some_and(|p| p.document_id.is_none())
+    {
+        return;
+    }
     let Some(age) = parse_age_days(&meta.created_at, now) else {
         return;
     };
 
     if cfg.delete_after_days > 0 && age >= cfg.delete_after_days as i64 {
         match std::fs::remove_dir_all(path) {
-            Ok(()) => info!(batch_id, age_days = age, "retention: deleted batch"),
-            Err(e) => warn!(batch_id, error = %e, "retention: failed to delete batch"),
+            Ok(()) => {
+                info!(event = "retention.batch_deleted", batch_id = %crate::logging::safe_batch_id(batch_id), age_days = age, "retention: deleted batch")
+            }
+            Err(_) => {
+                warn!(event = "retention.delete_failed", batch_id = %crate::logging::safe_batch_id(batch_id), "retention: failed to delete batch")
+            }
         }
     } else if cfg.archive_after_days > 0 && age >= cfg.archive_after_days as i64 {
         match archive_batch(path, batch_id, output_path, &meta.created_at) {
             Ok(()) => info!(
-                batch_id,
+                event = "retention.batch_archived",
+                batch_id = %crate::logging::safe_batch_id(batch_id),
                 age_days = age,
                 "retention: archived batch → .tar.zst"
             ),
-            Err(e) => warn!(batch_id, error = %e, "retention: failed to archive batch"),
+            Err(_) => {
+                warn!(event = "retention.archive_failed", batch_id = %crate::logging::safe_batch_id(batch_id), "retention: failed to archive batch")
+            }
         }
     }
 }
@@ -154,14 +219,28 @@ fn archive_batch(
 ) -> Result<()> {
     let archive_path = output_path.join(format!("{batch_id}.tar.zst"));
     let meta_path = output_path.join(format!("{batch_id}.meta"));
+    let archive_tmp = output_path.join(format!(
+        ".{batch_id}.{}.tar.zst.tmp",
+        uuid::Uuid::new_v4().simple()
+    ));
 
-    let file = std::fs::File::create(&archive_path)?;
-    // Level 3: good compression ratio with fast encode (~300 MB/s on modern hw)
-    let encoder = zstd::Encoder::new(file, 3)?;
-    let mut tar = tar::Builder::new(encoder);
-    tar.append_dir_all(batch_id, batch_dir)?;
-    let encoder = tar.into_inner()?;
-    encoder.finish()?;
+    let build_result = (|| -> Result<()> {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&archive_tmp)?;
+        let encoder = zstd::Encoder::new(file, 3)?;
+        let mut tar = tar::Builder::new(encoder);
+        tar.append_dir_all(batch_id, batch_dir)?;
+        let encoder = tar.into_inner()?;
+        encoder.finish()?.sync_all()?;
+        std::fs::rename(&archive_tmp, &archive_path)?;
+        Ok(())
+    })();
+    if build_result.is_err() {
+        let _ = std::fs::remove_file(&archive_tmp);
+    }
+    build_result?;
 
     // Sidecar preserves original creation date so delete-age is measured from
     // batch creation, not from when archiving ran.
@@ -213,6 +292,52 @@ mod tests {
     use serde_json::json;
     use std::fs;
 
+    #[tokio::test]
+    async fn shutdown_stops_idle_retention_worker() {
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let worker = tokio::spawn(run_forever(
+            JobStore::new(vec![]),
+            Arc::new(Mutex::new(RetentionConfig::default())),
+            BatchStore::default(),
+            shutdown_rx,
+        ));
+        shutdown_tx.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), worker)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    fn shutdown_stops_retention_between_batches() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ids = [completed_batch(tmp.path()), completed_batch(tmp.path())];
+        for id in &ids {
+            let path = tmp.path().join(id).join("metadata.json");
+            let mut meta: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            meta["created_at"] = json!("2000-01-01T00:00:00+00:00");
+            fs::write(path, serde_json::to_vec(&meta).unwrap()).unwrap();
+        }
+        let checks = std::cell::Cell::new(0);
+        run_once_impl(
+            &[make_job(tmp.path())],
+            &RetentionConfig {
+                archive_after_days: 0,
+                delete_after_days: 1,
+            },
+            || {
+                checks.set(checks.get() + 1);
+                checks.get() >= 3
+            },
+        );
+        assert_eq!(
+            ids.iter().filter(|id| tmp.path().join(id).is_dir()).count(),
+            1,
+            "the active deletion may finish, but the next one must not start"
+        );
+    }
+
     fn make_job(dir: &std::path::Path) -> Job {
         Job {
             output_path: dir.to_path_buf(),
@@ -243,6 +368,39 @@ mod tests {
     }
 
     #[test]
+    fn retention_ignores_files_without_a_canonical_batch_id() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let short_dir = tmp.path().join("deadbeef");
+        fs::create_dir(&short_dir).unwrap();
+        let batch_id = completed_batch(tmp.path());
+        let metadata = fs::read(tmp.path().join(&batch_id).join("metadata.json")).unwrap();
+        let mut old: serde_json::Value = serde_json::from_slice(&metadata).unwrap();
+        old["created_at"] = json!("2000-01-01T00:00:00+00:00");
+        fs::write(
+            short_dir.join("metadata.json"),
+            serde_json::to_vec(&old).unwrap(),
+        )
+        .unwrap();
+        let unrelated_archive = tmp.path().join("backup.tar.zst");
+        fs::write(&unrelated_archive, b"private backup").unwrap();
+        fs::write(
+            tmp.path().join("backup.meta"),
+            r#"{"created_at":"2000-01-01T00:00:00+00:00"}"#,
+        )
+        .unwrap();
+
+        run_once(
+            &[make_job(tmp.path())],
+            &RetentionConfig {
+                archive_after_days: 0,
+                delete_after_days: 1,
+            },
+        );
+        assert!(short_dir.exists());
+        assert_eq!(fs::read(unrelated_archive).unwrap(), b"private backup");
+    }
+
+    #[test]
     fn test_run_once_does_not_delete_incomplete_batch() {
         let tmp = tempfile::TempDir::new().unwrap();
         let job = make_job(tmp.path());
@@ -268,6 +426,15 @@ mod tests {
     }
 
     #[test]
+    fn test_failed_archive_does_not_publish_partial_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let id = "1234567890abcdef1234567890abcdef";
+        let missing = tmp.path().join(id);
+        assert!(archive_batch(&missing, id, tmp.path(), "2020-01-01T00:00:00+00:00").is_err());
+        assert!(!tmp.path().join(format!("{id}.tar.zst")).exists());
+    }
+
+    #[test]
     fn test_run_once_deletes_old_dir_when_delete_threshold_zero_days() {
         let tmp = tempfile::TempDir::new().unwrap();
         let batch_id = completed_batch(tmp.path());
@@ -287,6 +454,42 @@ mod tests {
             !tmp.path().join(&batch_id).is_dir(),
             "old batch must be deleted"
         );
+    }
+
+    #[test]
+    fn test_retention_keeps_old_batch_until_paperless_confirms_document() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let job = make_job(tmp.path());
+        let mut batch = Batch::create(&job, ScannerInfo::default()).unwrap();
+        batch.enable_paperless().unwrap();
+        batch
+            .add_file(
+                "page.jpg",
+                include_bytes!("../tests/fixtures/scan_page.jpg"),
+                json!({}),
+            )
+            .unwrap();
+        batch.complete().unwrap();
+        let id = batch.id.clone();
+        let meta_path = tmp.path().join(&id).join("metadata.json");
+        let mut meta: serde_json::Value =
+            serde_json::from_slice(&fs::read(&meta_path).unwrap()).unwrap();
+        meta["created_at"] = json!("2000-01-01T00:00:00+00:00");
+        fs::write(&meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
+        let cfg = RetentionConfig {
+            archive_after_days: 1,
+            delete_after_days: 1,
+        };
+        run_once(std::slice::from_ref(&job), &cfg);
+        assert!(tmp.path().join(&id).is_dir());
+        batch.record_paperless_document(42).unwrap();
+        // Reapply the old timestamp because writing the receipt used the in-memory metadata.
+        let mut meta: serde_json::Value =
+            serde_json::from_slice(&fs::read(&meta_path).unwrap()).unwrap();
+        meta["created_at"] = json!("2000-01-01T00:00:00+00:00");
+        fs::write(&meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
+        run_once(&[job], &cfg);
+        assert!(!tmp.path().join(&id).exists());
     }
 
     #[test]

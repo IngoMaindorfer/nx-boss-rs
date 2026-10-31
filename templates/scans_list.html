@@ -1,8 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-header">
-  <h2>Scans</h2>
+  <h2>{{ t.nav_scans }}</h2>
 </div>
+
+{% if paperless_attention_count > 0 %}
+<div class="card" role="alert">{{ t.paperless_attention_count }}: {{ paperless_attention_count }}</div>
+{% endif %}
 
 <div class="card">
   {% if scans.is_empty() %}
@@ -21,11 +25,11 @@
     </thead>
     <tbody>
       {% for scan in scans %}
-      <tr>
-        <td>{{ scan.created_at }}</td>
+      <tr class="scan-row" data-scan-href="/scans/{{ scan.batch_id }}" tabindex="0" aria-label="{{ t.btn_details }}: {{ scan.job_name }}"{% if scan.paperless_attention %} data-paperless-attention="true"{% endif %}>
+        <td><time datetime="{{ scan.created_at }}">{{ scan.created_at }}</time></td>
         <td>{{ scan.job_name }}</td>
         <td>{{ scan.page_count }}</td>
-        <td>{% if scan.completed %}{{ t.status_completed }}{% else %}{{ t.status_open }}{% endif %}</td>
+        <td>{% if scan.completed %}{{ t.status_completed }}{% else %}{{ t.status_open }}{% endif %}{% if let Some(status) = scan.paperless_status %}<br>Paperless: {{ status }}{% endif %}</td>
         <td><a href="/scans/{{ scan.batch_id }}" class="btn btn-sm btn-secondary">{{ t.btn_details }}</a></td>
       </tr>
       {% endfor %}

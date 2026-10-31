@@ -6,7 +6,7 @@
 
 <div class="card">
   {% if saved %}
-  <div style="background:#e8f5e9;color:#2e7d32;padding:.75rem 1rem;border-radius:6px;font-size:.875rem;margin-bottom:1rem;">
+  <div class="alert-success">
     {{ t.settings_saved }}
   </div>
   {% endif %}
@@ -15,7 +15,7 @@
   {% endif %}
 
   <h3>{{ t.settings_retention_title }}</h3>
-  <p style="font-size:.875rem;color:#6c757d;margin-bottom:1.25rem;">
+  <p class="muted" style="font-size:.875rem;margin-bottom:1.25rem;">
     {{ t.settings_retention_desc1 }}
     {{ t.settings_retention_desc2 }}
     <strong>{{ t.settings_zero_disabled }}</strong>
@@ -26,14 +26,14 @@
       <label for="archive_after_days">{{ t.settings_archive_label }}</label>
       <input id="archive_after_days" name="archive_after_days" type="number"
              min="0" max="3650" value="{{ archive_after_days }}">
-      <span style="font-size:.8rem;color:#6c757d;">{{ t.settings_archive_hint }}</span>
+      <span class="muted" style="font-size:.8rem">{{ t.settings_archive_hint }}</span>
     </div>
 
     <div class="field">
       <label for="delete_after_days">{{ t.settings_delete_label }}</label>
       <input id="delete_after_days" name="delete_after_days" type="number"
              min="0" max="3650" value="{{ delete_after_days }}">
-      <span style="font-size:.8rem;color:#6c757d;">{{ t.settings_delete_hint }}</span>
+      <span class="muted" style="font-size:.8rem">{{ t.settings_delete_hint }}</span>
     </div>
 
     <div class="form-actions">
@@ -41,4 +41,7 @@
     </div>
   </form>
 </div>
+<div class="card"><h3>{% if t.code == "de" %}Sicherheit{% else %}Security{% endif %}</h3><p><a href="/settings/scanner">{% if t.code == "de" %}Scanner-Anmeldung verwalten{% else %}Manage scanner authentication{% endif %}</a></p><p><a href="/account">{% if t.code == "de" %}Admin-Konto verwalten{% else %}Manage admin account{% endif %}</a></p></div>
+<div class="card"><h3>Paperless-ngx</h3><p><a href="/settings/paperless">{% if t.code == "de" %}Verbindung und Upload-Optionen verwalten{% else %}Manage connection and upload options{% endif %}</a></p></div>
+<div class="card"><h3>{% if t.code == "de" %}Standardsprache{% else %}Default language{% endif %}</h3><form method="post" action="/settings/language" hx-boost="true" class="edit-form"><label for="default_lang">{% if t.code == "de" %}Sprache für neue Browser{% else %}Language for new browsers{% endif %}</label><select id="default_lang" name="lang"><option value="de" {% if default_lang == "de" %}selected{% endif %}>Deutsch</option><option value="en" {% if default_lang == "en" %}selected{% endif %}>English</option></select><button type="submit" class="btn btn-primary">{{ t.btn_save }}</button></form></div>
 {% endblock %}

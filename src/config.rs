@@ -23,11 +23,17 @@ pub const KEY_PIXEL_FORMAT: &str = "pixelFormat";
 pub const KEY_SOURCE: &str = "source";
 pub const KEY_PIXEL_FORMATS: &str = "pixelFormats";
 
-static DEFAULTS_YAML: &str = include_str!("../defaults.yaml");
+static DEFAULTS_YAML: &str = include_str!("../resources/defaults.yaml");
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct RawConfig {
     pub jobs: IndexMap<String, RawJob>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scanner_auth: Option<ScannerAuthConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paperless: Option<PaperlessConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_job_id: Option<usize>,
     #[serde(default)]
     pub retention: RetentionConfig,
     #[serde(default = "default_lang")]
@@ -41,6 +47,8 @@ fn default_lang() -> String {
 #[derive(Debug, Deserialize, Serialize, Default)]
 pub struct RawJob {
     pub output_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consume_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -69,9 +77,65 @@ pub struct RetentionConfig {
     pub delete_after_days: u32,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PaperlessConfig {
+    /// Paperless base URL or the complete /api/documents/post_document/ endpoint.
+    pub url: String,
+    #[serde(default = "default_paperless_token_env")]
+    pub token_env: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_file: Option<PathBuf>,
+    #[serde(default)]
+    pub tag_ids: Vec<u32>,
+    #[serde(default)]
+    pub batch_id_field_id: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScannerAuthConfig {
+    pub mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_hash: Option<String>,
+}
+
+impl ScannerAuthConfig {
+    pub fn validate(&self) -> Result<()> {
+        match self.mode.as_str() {
+            "none" => Ok(()),
+            "userpass" => {
+                let username = self.username.as_deref().unwrap_or("");
+                if username.is_empty()
+                    || username.len() > 128
+                    || username.chars().any(char::is_control)
+                {
+                    bail!(
+                        "scanner_auth.username is required and must be at most 128 printable bytes"
+                    );
+                }
+                let hash = self.password_hash.as_deref().unwrap_or("");
+                if !hash.starts_with("$argon2id$") || hash.len() > 512 {
+                    bail!("scanner_auth.password_hash must be an Argon2id PHC string");
+                }
+                Ok(())
+            }
+            _ => bail!("scanner_auth.mode must be none or userpass"),
+        }
+    }
+}
+
+fn default_paperless_token_env() -> String {
+    "PAPERLESS_API_TOKEN".to_string()
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub jobs: Vec<Job>,
+    pub scanner_auth: Option<ScannerAuthConfig>,
+    pub paperless: Option<PaperlessConfig>,
+    pub next_job_id: usize,
     pub retention: RetentionConfig,
     pub lang: String,
 }
@@ -80,6 +144,9 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             jobs: Vec::new(),
+            scanner_auth: None,
+            paperless: None,
+            next_job_id: 0,
             retention: RetentionConfig::default(),
             lang: "de".to_string(),
         }
@@ -95,20 +162,62 @@ impl Config {
 
     pub fn parse(yaml: &str) -> Result<Self> {
         let raw: RawConfig = serde_yaml::from_str(yaml).context("parsing config YAML")?;
-        let jobs = raw
-            .jobs
-            .into_iter()
-            .enumerate()
-            .map(|(id, (name, job))| Job::parse(id, name, job))
-            .collect::<Result<Vec<_>>>()?;
+        if let Some(ref auth) = raw.scanner_auth {
+            auth.validate()?;
+        }
+        let mut used: std::collections::HashSet<usize> =
+            raw.jobs.values().filter_map(|j| j.job_id).collect();
+        if used.len() != raw.jobs.values().filter(|j| j.job_id.is_some()).count() {
+            bail!("duplicate job_id in config");
+        }
+        let mut next_id = 0usize;
+        let mut jobs = Vec::new();
+        for (name, job) in raw.jobs {
+            let id = if let Some(id) = job.job_id {
+                id
+            } else {
+                while used.contains(&next_id) {
+                    next_id += 1;
+                }
+                let id = next_id;
+                used.insert(id);
+                id
+            };
+            next_id = next_id.max(id.checked_add(1).context("job_id overflow")?);
+            jobs.push(Job::parse(id, name, job)?);
+        }
+        next_id = next_id.max(raw.next_job_id.unwrap_or(0));
         Ok(Self {
             jobs,
+            scanner_auth: raw.scanner_auth,
+            paperless: raw.paperless,
+            next_job_id: next_id,
             retention: raw.retention,
             lang: raw.lang,
         })
     }
 
+    #[cfg(test)]
     pub fn save(jobs: &[Job], retention: &RetentionConfig, lang: &str, path: &Path) -> Result<()> {
+        let next_job_id = jobs
+            .iter()
+            .filter_map(|j| j.job_info["job_id"].as_u64())
+            .max()
+            .and_then(|id| usize::try_from(id).ok())
+            .and_then(|id| id.checked_add(1))
+            .unwrap_or(0);
+        Self::save_with_next(jobs, retention, lang, next_job_id, None, None, path)
+    }
+
+    pub fn save_with_next(
+        jobs: &[Job],
+        retention: &RetentionConfig,
+        lang: &str,
+        next_job_id: usize,
+        paperless: Option<&PaperlessConfig>,
+        scanner_auth: Option<&ScannerAuthConfig>,
+        path: &Path,
+    ) -> Result<()> {
         let mut map = IndexMap::new();
         for job in jobs {
             let (name, raw) = job.to_raw();
@@ -116,11 +225,14 @@ impl Config {
         }
         let raw = RawConfig {
             jobs: map,
+            paperless: paperless.cloned(),
+            scanner_auth: scanner_auth.cloned(),
+            next_job_id: Some(next_job_id),
             retention: retention.clone(),
             lang: lang.to_string(),
         };
         let yaml = serde_yaml::to_string(&raw).context("serializing config")?;
-        std::fs::write(path, yaml).context("writing config file")?;
+        crate::atomic_file::write(path, yaml.as_bytes()).context("saving config")?;
         Ok(())
     }
 }
@@ -171,29 +283,32 @@ impl Job {
     }
 
     pub fn to_raw(&self) -> (String, RawJob) {
-        let mut pf = HashMap::new();
-        pf.insert(KEY_RESOLUTION.to_string(), json!(self.resolution()));
-        pf.insert(KEY_JPEG_QUALITY.to_string(), json!(self.jpeg_quality()));
-        pf.insert(KEY_PIXEL_FORMAT.to_string(), json!(self.pixel_format()));
-        let mut scan_settings = HashMap::new();
-        scan_settings.insert(KEY_PIXEL_FORMATS.to_string(), json!(pf));
-        scan_settings.insert(KEY_SOURCE.to_string(), json!(self.source()));
+        let job_settings = self.job_info["job_setting"]
+            .as_object()
+            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
+        let scan_settings = self
+            .sources()
+            .as_object()
+            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
         (
             self.name().to_string(),
             RawJob {
                 output_path: self.output_path.to_string_lossy().to_string(),
+                job_id: self.job_info["job_id"]
+                    .as_u64()
+                    .and_then(|v| usize::try_from(v).ok()),
                 consume_path: self
                     .consume_path
                     .as_ref()
                     .map(|p| p.to_string_lossy().to_string()),
                 color: Some(self.color().to_string()),
-                job_settings: None,
-                scan_settings: Some(scan_settings),
+                job_settings,
+                scan_settings,
             },
         )
     }
 
-    fn parse(id: usize, name: String, raw: RawJob) -> Result<Self> {
+    pub(crate) fn parse(id: usize, name: String, raw: RawJob) -> Result<Self> {
         let color = raw.color.clone().unwrap_or_else(|| "#4D4D4D".to_string());
         validate_hex_color(&color).with_context(|| format!("job {name:?}: invalid color"))?;
 
@@ -341,7 +456,9 @@ fn coerce_and_set(dest: &mut Value, key: &str, value: &Value) -> Result<()> {
         // Same type — set directly
         (Value::Bool(_), Value::Bool(_))
         | (Value::String(_), Value::String(_))
-        | (Value::Number(_), Value::Number(_)) => {
+        | (Value::Number(_), Value::Number(_))
+        | (Value::Array(_), Value::Array(_))
+        | (Value::Null, Value::Null) => {
             dest[key] = value.clone();
         }
         // bool → "true"/"false" string
@@ -485,6 +602,72 @@ mod tests {
             reloaded.lang, "en",
             "lang must survive a save/reload round-trip"
         );
+    }
+
+    #[test]
+    fn test_save_preserves_advanced_job_and_scan_settings() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let yaml = format!(
+            "jobs:\n  Advanced:\n    output_path: {}\n    job_settings:\n      continuous_scan: true\n      job_timeout: 42\n    scan_settings:\n      pixelFormats:\n        resolution: 600\n        jpegQuality: 95\n      source: feederFront\n",
+            tmp.path().display()
+        );
+        let config = Config::parse(&yaml).unwrap();
+        let path = tmp.path().join("config.yaml");
+        Config::save(&config.jobs, &config.retention, &config.lang, &path).unwrap();
+        let reloaded = Config::load(&path).unwrap();
+        assert_eq!(
+            reloaded.jobs[0].job_info["job_setting"]["continuous_scan"],
+            true
+        );
+        assert_eq!(reloaded.jobs[0].job_info["job_setting"]["job_timeout"], 42);
+        assert_eq!(reloaded.jobs[0].resolution(), 600);
+        assert_eq!(reloaded.jobs[0].source(), "feederFront");
+    }
+
+    #[test]
+    fn test_save_preserves_paperless_api_config() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let yaml = format!(
+            "jobs:\n  Scan:\n    output_path: {}\npaperless:\n  url: http://paperless:8000\n  token_env: PAPERLESS_API_TOKEN\n  tag_ids: [7]\n",
+            tmp.path().display()
+        );
+        let config = Config::parse(&yaml).unwrap();
+        let path = tmp.path().join("config.yaml");
+        Config::save_with_next(
+            &config.jobs,
+            &config.retention,
+            &config.lang,
+            config.next_job_id,
+            config.paperless.as_ref(),
+            None,
+            &path,
+        )
+        .unwrap();
+        let reloaded = Config::load(&path).unwrap();
+        assert_eq!(reloaded.paperless.unwrap().tag_ids, vec![7]);
+    }
+
+    #[test]
+    fn saving_jobs_preserves_scanner_security_configuration() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let yaml = format!(
+            "jobs:\n  Scan:\n    output_path: {}\nscanner_auth:\n  mode: userpass\n  username: scanner\n  password_hash: '$argon2id$v=19$m=19456,t=2,p=1$testsalt$testhash'\n",
+            tmp.path().display()
+        );
+        let config = Config::parse(&yaml).unwrap();
+        let path = tmp.path().join("config.yaml");
+        Config::save_with_next(
+            &config.jobs,
+            &config.retention,
+            &config.lang,
+            config.next_job_id,
+            config.paperless.as_ref(),
+            config.scanner_auth.as_ref(),
+            &path,
+        )
+        .unwrap();
+        let reloaded = Config::load(&path).unwrap();
+        assert_eq!(reloaded.scanner_auth.unwrap().mode, "userpass");
     }
 
     #[test]

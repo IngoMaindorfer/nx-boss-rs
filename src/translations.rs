@@ -1,10 +1,44 @@
+#[derive(serde::Serialize)]
 pub struct Translations {
+    pub code: &'static str,
+    pub nav_dashboard: &'static str,
+    pub nav_scans: &'static str,
+    pub language_label: &'static str,
+    pub theme_label: &'static str,
+    pub theme_auto: &'static str,
+    pub theme_light: &'static str,
+    pub theme_dark: &'static str,
     pub nav_jobs: &'static str,
+    pub jobs_reorder_help: &'static str,
+    pub jobs_reorder_handle: &'static str,
+    pub jobs_reorder_saved: &'static str,
+    pub jobs_reorder_failed: &'static str,
+    pub jobs_reorder_conflict: &'static str,
     pub nav_settings: &'static str,
+    pub nav_events: &'static str,
+    pub nav_api_docs: &'static str,
+    pub events_scope: &'static str,
+    pub events_empty: &'static str,
+    pub events_persistence_warning: &'static str,
+    pub events_recent_errors: &'static str,
+    pub events_code: &'static str,
+    pub events_error_class: &'static str,
+    pub events_http_status: &'static str,
+    pub events_batch: &'static str,
     pub status_online: &'static str,
     pub status_offline: &'static str,
     pub status_completed: &'static str,
     pub status_open: &'static str,
+    pub paperless_pending: &'static str,
+    pub paperless_processing: &'static str,
+    pub paperless_imported: &'static str,
+    pub paperless_failed: &'static str,
+    pub paperless_attention: &'static str,
+    pub paperless_attention_count: &'static str,
+    pub paperless_task_id: &'static str,
+    pub paperless_attempts: &'static str,
+    pub paperless_last_attempt: &'static str,
+    pub paperless_reconcile_hint: &'static str,
     pub btn_save: &'static str,
     pub btn_cancel: &'static str,
     pub btn_edit: &'static str,
@@ -27,6 +61,12 @@ pub struct Translations {
     pub source_front: &'static str,
     pub source_rear: &'static str,
     pub dash_recent_scans: &'static str,
+    pub dash_documents: &'static str,
+    pub dash_pages: &'static str,
+    pub dash_imported: &'static str,
+    pub dash_needs_attention: &'static str,
+    pub dash_open_batches: &'static str,
+    pub dash_stats_scope: &'static str,
     pub no_jobs: &'static str,
     pub create_now: &'static str,
     pub no_scans: &'static str,
@@ -63,13 +103,56 @@ pub struct Translations {
     pub err_delete_gt_archive: &'static str,
 }
 
+impl Translations {
+    pub fn pixel_format_label<'a>(&'a self, code: &'a str) -> &'a str {
+        match code {
+            "gray8" => self.pf_gray,
+            "rgb24" => self.pf_rgb,
+            _ => code,
+        }
+    }
+}
+
 pub static DE: Translations = Translations {
+    code: "de",
+    nav_dashboard: "Dashboard",
+    nav_scans: "Scans",
+    language_label: "Sprache",
+    theme_label: "Darstellung",
+    theme_auto: "System",
+    theme_light: "Hell",
+    theme_dark: "Dunkel",
     nav_jobs: "Scan-Jobs",
+    jobs_reorder_help: "Am Griff ziehen oder mit Pfeil hoch/runter verschieben. Die Reihenfolge erscheint auch am Scanner.",
+    jobs_reorder_handle: "Job verschieben",
+    jobs_reorder_saved: "Reihenfolge gespeichert.",
+    jobs_reorder_failed: "Reihenfolge konnte nicht gespeichert werden.",
+    jobs_reorder_conflict: "Die Job-Liste wurde anderswo geändert und wird neu geladen.",
     nav_settings: "Einstellungen",
+    nav_events: "Fehlerprotokoll",
+    nav_api_docs: "API-Doku",
+    events_scope: "Die letzten 200 Warnungen und Fehler aus nx-boss. Nur Zeit, Ereigniscode und geprüfte technische Kennungen werden gespeichert; vollständige Docker-Logs stehen hier nicht.",
+    events_empty: "Keine Warnungen oder Fehler aufgezeichnet.",
+    events_persistence_warning: "Das Ereignisprotokoll kann derzeit nicht dauerhaft gespeichert werden.",
+    events_recent_errors: "Fehler (letzte 200 Ereignisse)",
+    events_code: "Ereignis",
+    events_error_class: "Fehlerklasse",
+    events_http_status: "HTTP-Status",
+    events_batch: "Batch",
     status_online: "online",
     status_offline: "offline",
     status_completed: "abgeschlossen",
     status_open: "offen",
+    paperless_pending: "wartet auf Upload",
+    paperless_processing: "wird verarbeitet",
+    paperless_imported: "importiert",
+    paperless_failed: "Fehler",
+    paperless_attention: "Klärung nötig",
+    paperless_attention_count: "Paperless-Importe brauchen Prüfung",
+    paperless_task_id: "Paperless-Task-ID",
+    paperless_attempts: "Upload-Versuche",
+    paperless_last_attempt: "Letzter Upload-Versuch",
+    paperless_reconcile_hint: "Prüfe Batch-ID und Task-ID in Paperless, bevor du Dateien erneut hochlädst. nx-boss versucht unbestätigte Importe weiterhin automatisch abzugleichen.",
     btn_save: "Speichern",
     btn_cancel: "Abbrechen",
     btn_edit: "Bearbeiten",
@@ -92,6 +175,12 @@ pub static DE: Translations = Translations {
     source_front: "Einseitig (Vorderseite)",
     source_rear: "Einseitig (R\u{fc}ckseite)",
     dash_recent_scans: "Letzte Scans",
+    dash_documents: "Abgeschlossene Dokumente",
+    dash_pages: "Gescannte Seiten",
+    dash_imported: "In Paperless importiert",
+    dash_needs_attention: "Klärung nötig",
+    dash_open_batches: "Offene Scans",
+    dash_stats_scope: "Aktuell gespeicherte Scan-Daten; gelöschte Archive sind nicht enthalten.",
     no_jobs: "Keine Jobs konfiguriert.",
     create_now: "Jetzt anlegen",
     no_scans: "Noch keine Scans vorhanden.",
@@ -128,12 +217,45 @@ pub static DE: Translations = Translations {
 };
 
 pub static EN: Translations = Translations {
+    code: "en",
+    nav_dashboard: "Dashboard",
+    nav_scans: "Scans",
+    language_label: "Language",
+    theme_label: "Appearance",
+    theme_auto: "System",
+    theme_light: "Light",
+    theme_dark: "Dark",
     nav_jobs: "Scan Jobs",
+    jobs_reorder_help: "Drag the handle or use the up/down arrow keys. The order also appears on the scanner.",
+    jobs_reorder_handle: "Move job",
+    jobs_reorder_saved: "Order saved.",
+    jobs_reorder_failed: "Could not save the order.",
+    jobs_reorder_conflict: "The job list changed elsewhere and will reload.",
     nav_settings: "Settings",
+    nav_events: "Error log",
+    nav_api_docs: "API docs",
+    events_scope: "The latest 200 nx-boss warnings and errors. Only time, event code, and validated technical identifiers are stored; full Docker logs are not shown here.",
+    events_empty: "No warnings or errors recorded.",
+    events_persistence_warning: "The event log cannot currently be saved persistently.",
+    events_recent_errors: "Errors (last 200 events)",
+    events_code: "Event",
+    events_error_class: "Error class",
+    events_http_status: "HTTP status",
+    events_batch: "Batch",
     status_online: "online",
     status_offline: "offline",
     status_completed: "completed",
     status_open: "open",
+    paperless_pending: "waiting for upload",
+    paperless_processing: "processing",
+    paperless_imported: "imported",
+    paperless_failed: "error",
+    paperless_attention: "Needs review",
+    paperless_attention_count: "Paperless imports need review",
+    paperless_task_id: "Paperless task ID",
+    paperless_attempts: "Upload attempts",
+    paperless_last_attempt: "Last upload attempt",
+    paperless_reconcile_hint: "Check the batch ID and task ID in Paperless before uploading files again. nx-boss continues to reconcile unconfirmed imports automatically.",
     btn_save: "Save",
     btn_cancel: "Cancel",
     btn_edit: "Edit",
@@ -156,6 +278,12 @@ pub static EN: Translations = Translations {
     source_front: "Simplex (front)",
     source_rear: "Simplex (rear)",
     dash_recent_scans: "Recent Scans",
+    dash_documents: "Completed documents",
+    dash_pages: "Scanned pages",
+    dash_imported: "Imported to Paperless",
+    dash_needs_attention: "Needs review",
+    dash_open_batches: "Open scans",
+    dash_stats_scope: "Currently stored scan data; deleted archives are not included.",
     no_jobs: "No jobs configured.",
     create_now: "Create one now",
     no_scans: "No scans yet.",
@@ -195,5 +323,42 @@ pub fn for_lang(lang: &str) -> &'static Translations {
     match lang {
         "en" => &EN,
         _ => &DE,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_pixel_format_keeps_its_protocol_name() {
+        assert_eq!(DE.pixel_format_label("mono1"), "mono1");
+        assert_eq!(EN.pixel_format_label("mono1"), "mono1");
+    }
+
+    #[test]
+    fn every_locale_has_nonempty_values_and_matching_placeholders() {
+        let de = serde_json::to_value(&DE).unwrap();
+        let en = serde_json::to_value(&EN).unwrap();
+        let de = de.as_object().unwrap();
+        let en = en.as_object().unwrap();
+        assert_eq!(de.len(), en.len());
+        for (key, value) in de {
+            let english = en
+                .get(key)
+                .unwrap_or_else(|| panic!("missing English translation: {key}"));
+            let german = value.as_str().unwrap();
+            let english = english.as_str().unwrap();
+            assert!(!german.trim().is_empty(), "empty German translation: {key}");
+            assert!(
+                !english.trim().is_empty(),
+                "empty English translation: {key}"
+            );
+            assert_eq!(
+                german.matches("{0}").count(),
+                english.matches("{0}").count(),
+                "placeholder mismatch: {key}"
+            );
+        }
     }
 }

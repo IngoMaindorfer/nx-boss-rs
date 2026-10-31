@@ -28,12 +28,6 @@
     </div>
 
     <div class="field">
-      <label for="output_path">{{ t.field_output_path }}</label>
-      <input id="output_path" name="output_path" type="text" value="{{ output_path }}" required
-             placeholder="{{ t.placeholder_path }}">
-    </div>
-
-    <div class="field">
       <label for="consume_path">{{ t.field_consume_path }}</label>
       <input id="consume_path" name="consume_path" type="text" value="{{ consume_path }}"
              placeholder="{{ t.placeholder_consume }}">
@@ -78,5 +72,6 @@
       <a href="/jobs" class="btn btn-secondary">{{ t.btn_cancel }}</a>
     </div>
   </form>
+  {% if editing %}<p class="muted" style="margin-top:1rem"><a href="/jobs/{{ job_id }}/expert">{% if t.code == "de" %}Erweiterte Job-Parameter bearbeiten{% else %}Edit advanced job parameters{% endif %}</a></p>{% endif %}
 </div>
 {% endblock %}

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header"><h2>{{ t.nav_api_docs }}</h2></div>
+<div class="card">
+  {% if t.code == "de" %}
+  <p>Scanner-Protokoll von nx-boss. Die Beschreibung zeigt die implementierten Endpunkte und ist keine offizielle Ricoh-Spezifikation.</p>
+  <p>Die meisten Admin-Routen liefern HTML-Formulare; sie sind keine öffentliche JSON-API. Dieser Explorer führt keine Schreibaufrufe aus.</p>
+  <p><a href="/api/openapi.json" download="nx-boss-openapi.json">OpenAPI 3.1 als JSON herunterladen</a></p>
+  {% else %}
+  <p>nx-boss scanner protocol. This describes implemented endpoints and is not an official Ricoh specification.</p>
+  <p>Most admin routes serve HTML forms rather than a public JSON API. This explorer does not execute write requests.</p>
+  <p><a href="/api/openapi.json" download="nx-boss-openapi.json">Download OpenAPI 3.1 JSON</a></p>
+  {% endif %}
+</div>
+<div id="api-docs-operations" data-lang="{{ t.code }}" aria-live="polite"></div>
+<script src="/static/api-docs.js" defer></script>
+{% endblock %}
