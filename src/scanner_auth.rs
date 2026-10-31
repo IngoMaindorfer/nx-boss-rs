@@ -42,9 +42,6 @@ impl ScannerAuthStore {
     pub fn requires_login(&self) -> bool {
         self.snapshot().requires_login()
     }
-    pub fn probe_matches(&self, body: &[u8]) -> (bool, bool) {
-        self.snapshot().probe_matches(body)
-    }
     pub fn login(&self, body: &[u8]) -> Option<String> {
         self.snapshot().login(body)
     }
@@ -206,30 +203,6 @@ impl ScannerAuthMode {
 
     pub fn requires_login(&self) -> bool {
         matches!(self, Self::Userpass(_))
-    }
-
-    // Diagnostic only. Never include request values or configured secrets in a log.
-    pub fn probe_matches(&self, body: &[u8]) -> (bool, bool) {
-        let Self::Userpass(credentials) = self else {
-            return (false, false);
-        };
-        let Ok(payload) = serde_json::from_slice::<serde_json::Value>(body) else {
-            return (false, false);
-        };
-        let user_match = payload
-            .get("auth_info_user")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|value| {
-                crate::security::constant_time_eq(credentials.username.as_bytes(), value.as_bytes())
-            });
-        let pass_match = credentials.password_hash.is_none()
-            && payload
-                .get("auth_info_pass")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|value| {
-                    crate::security::constant_time_eq(&credentials.password, value.as_bytes())
-                });
-        (user_match, pass_match)
     }
 
     pub fn login(&self, body: &[u8]) -> Option<String> {
@@ -476,34 +449,6 @@ mod tests {
         std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
         symlink(&real, &link).unwrap();
         assert!(ScannerAuthMode::from_values("userpass", Some("alice"), Some(&link)).is_err());
-    }
-
-    #[test]
-    fn observed_scanner_fields_can_be_compared_without_returning_values() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("scanner-password");
-        std::fs::write(&path, b"private-test-password\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        }
-        let mode = ScannerAuthMode::from_values("userpass", Some("alice"), Some(&path)).unwrap();
-        assert_eq!(
-            mode.probe_matches(
-                br#"{"auth_info_user":"alice","auth_info_pass":"private-test-password"}"#
-            ),
-            (true, true)
-        );
-        assert_eq!(
-            mode.probe_matches(br#"{"auth_info_user":"alice","auth_info_pass":"wrong"}"#),
-            (true, false)
-        );
-        assert_eq!(
-            mode.probe_matches(br#"{"auth_info_user":{},"auth_info_pass":null}"#),
-            (false, false)
-        );
-        assert_eq!(mode.probe_matches(b"not json"), (false, false));
     }
 
     #[test]

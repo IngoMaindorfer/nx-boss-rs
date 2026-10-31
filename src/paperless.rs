@@ -1,3 +1,4 @@
+use crate::scan_date::local_scan_date;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -79,10 +80,7 @@ impl PaperlessClient {
             http,
             base_url,
             token,
-            timezone: std::env::var("NX_BOSS_TIMEZONE")
-                .unwrap_or_else(|_| "Europe/Berlin".into())
-                .parse()
-                .context("invalid NX_BOSS_TIMEZONE")?,
+            timezone: crate::scan_date::configured_timezone()?,
             config,
         })
     }
@@ -402,13 +400,6 @@ async fn reconcile_or_retry(client: &PaperlessClient, batch: &mut Batch) -> Resu
         batch.record_paperless_attempt()?;
     }
     Ok(())
-}
-
-fn local_scan_date(created_at: &str, timezone: chrono_tz::Tz) -> Result<String> {
-    Ok(DateTime::parse_from_rfc3339(created_at)?
-        .with_timezone(&timezone)
-        .format("%Y-%m-%d")
-        .to_string())
 }
 
 async fn upload_batch(client: &PaperlessClient, batch: &mut Batch) -> Result<()> {

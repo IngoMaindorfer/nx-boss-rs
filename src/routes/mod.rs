@@ -193,15 +193,6 @@ pub(super) fn scanner_bearer(headers: &axum::http::HeaderMap) -> Option<&str> {
 
 async fn scanner_session_gate(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let path = req.uri().path();
-    if state.scanner_auth_experiment.is_some()
-        && path.starts_with("/NmWebService/")
-        && !matches!(
-            path,
-            "/NmWebService/heartbeat" | "/NmWebService/device" | "/NmWebService/authorization"
-        )
-    {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
     if state.scanner_auth_mode.requires_login()
         && path.starts_with("/NmWebService/")
         && !matches!(

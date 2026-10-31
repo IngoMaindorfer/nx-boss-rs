@@ -186,7 +186,7 @@ impl Batch {
         }))
     }
 
-    pub(crate) fn inspect_directory(dir: &Path) -> Result<BatchMetadata> {
+    pub(crate) fn read_metadata(dir: &Path) -> Result<BatchMetadata> {
         let meta_path = dir.join("metadata.json");
         if !meta_path
             .symlink_metadata()
@@ -194,9 +194,14 @@ impl Batch {
         {
             return Err(CorruptBatchError.into());
         }
-        let mut metadata: BatchMetadata =
+        let metadata: BatchMetadata =
             serde_json::from_slice(&std::fs::read(&meta_path).map_err(|_| CorruptBatchError)?)
                 .map_err(|_| CorruptBatchError)?;
+        Ok(metadata)
+    }
+
+    pub(crate) fn inspect_directory(dir: &Path) -> Result<BatchMetadata> {
+        let mut metadata = Self::read_metadata(dir)?;
         for page in &mut metadata.files {
             if page.filename.starts_with('.')
                 || !page
@@ -444,7 +449,7 @@ impl Batch {
         // The fi-7300NX does not support blankPageSkip in hardware and we avoid
         // duplicating post-processing that the consumer already handles.
         let base = self.output_filename_base();
-        let sidecar = self.build_sidecar(&base);
+        let sidecar = self.build_sidecar(&base)?;
 
         // Write JSON sidecar first — present before PDF triggers Paperless consumption.
         // A pre-consume script can read {basename}.json to set title/tags via the API.
@@ -500,7 +505,7 @@ impl Batch {
         format!("{safe_name}_{}", self.id)
     }
 
-    fn build_sidecar(&self, base: &str) -> Value {
+    fn build_sidecar(&self, base: &str) -> Result<Value> {
         // Normalise job name to a slug for the Paperless tag (e.g. "My Job" → "my-job").
         let tag: String = self
             .metadata
@@ -514,8 +519,11 @@ impl Batch {
                 }
             })
             .collect();
-        let created_date = self.metadata.created_at.get(..10).unwrap_or("");
-        serde_json::json!({
+        let created_date = crate::scan_date::local_scan_date(
+            &self.metadata.created_at,
+            crate::scan_date::configured_timezone()?,
+        )?;
+        Ok(serde_json::json!({
             "title": format!("{} {created_date}", self.metadata.job_name),
             "created": created_date,
             "tags": ["scan", tag],
@@ -529,7 +537,7 @@ impl Batch {
                 "scanner_model": self.metadata.scanner.model.as_deref().unwrap_or(""),
                 "filename_base": base,
             }
-        })
+        }))
     }
 
     pub fn metadata(&self) -> &BatchMetadata {
@@ -594,6 +602,21 @@ mod tests {
             consume_path: None,
             job_info: json!({"name": "test", "job_id": 0, "color": "#4D4D4D", "type": 0, "job_setting": {}, "hierarchy_list": null}),
             scan_settings: json!({}),
+        }
+    }
+
+    #[test]
+    fn consume_sidecar_uses_berlin_scan_date_at_midnight() {
+        let root = tempfile::tempdir().unwrap();
+        let mut batch = Batch::create(&make_job(root.path()), ScannerInfo::default()).unwrap();
+        for (utc, expected) in [
+            ("2026-07-01T22:30:00Z", "2026-07-02"),
+            ("2026-01-01T23:30:00Z", "2026-01-02"),
+        ] {
+            batch.metadata.created_at = utc.into();
+            let sidecar = batch.build_sidecar("test").unwrap();
+            assert_eq!(sidecar["created"], expected);
+            assert_eq!(sidecar["title"], format!("test {expected}"));
         }
     }
 

@@ -109,7 +109,6 @@ pub struct AppState {
     pub scanner: ScannerState,
     pub admin_auth: Option<crate::admin_auth::AdminAuth>,
     pub scanner_auth_mode: crate::scanner_auth::ScannerAuthStore,
-    pub scanner_auth_experiment: Option<&'static str>,
     pub scanner_auth_config: Arc<Mutex<Option<ScannerAuthConfig>>>,
     pub jobs: JobStore,
     pub batches: BatchStore,
@@ -153,6 +152,23 @@ impl AppState {
             };
             for entry in entries.flatten() {
                 let id = entry.file_name().to_string_lossy().to_string();
+                if let Some(batch_id) = id.strip_prefix(".discarded-")
+                    && crate::batch::valid_batch_id(batch_id)
+                    && entry.file_type().is_ok_and(|kind| kind.is_dir())
+                {
+                    if std::fs::remove_dir_all(entry.path())
+                        .and_then(|_| std::fs::File::open(&job.output_path)?.sync_all())
+                        .is_err()
+                    {
+                        tracing::warn!(
+                            event = "batch.discard_cleanup_failed",
+                            error_class = "storage",
+                            "could not remove discarded scan at startup"
+                        );
+                    }
+                    continue;
+                }
+
                 match Batch::resume(job, &id) {
                     Ok(Some(batch)) => {
                         recovered.insert(id, Arc::new(Mutex::new(batch)));
@@ -171,7 +187,6 @@ impl AppState {
             scanner: ScannerState::default(),
             admin_auth: None,
             scanner_auth_mode: crate::scanner_auth::ScannerAuthStore::default(),
-            scanner_auth_experiment: None,
             scanner_auth_config: Arc::new(Mutex::new(config.scanner_auth)),
             jobs: JobStore::new(config.jobs),
             batches: BatchStore(Arc::new(Mutex::new(recovered))),
@@ -197,11 +212,6 @@ impl AppState {
 
     pub fn with_scanner_auth_mode(mut self, mode: crate::scanner_auth::ScannerAuthMode) -> Self {
         self.scanner_auth_mode = crate::scanner_auth::ScannerAuthStore::new(mode);
-        self
-    }
-
-    pub fn with_scanner_auth_experiment(mut self, wire_type: &'static str) -> Self {
-        self.scanner_auth_experiment = Some(wire_type);
         self
     }
 
@@ -395,6 +405,34 @@ mod tests {
     use super::*;
     use crate::batch::{Batch, ScannerInfo};
     use serde_json::json;
+
+    #[test]
+    fn startup_removes_only_valid_discard_tombstone_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let tomb = root
+            .path()
+            .join(".discarded-0123456789abcdef0123456789abcdef");
+        let other = root.path().join(".discarded-not-a-batch");
+        let regular = root
+            .path()
+            .join(".discarded-1123456789abcdef0123456789abcdef");
+        std::fs::create_dir(&tomb).unwrap();
+        std::fs::write(tomb.join("page.jpg"), b"fixture").unwrap();
+        std::fs::create_dir(&other).unwrap();
+        std::fs::write(&regular, b"keep").unwrap();
+        let _state = AppState::new(Config {
+            jobs: vec![crate::config::Job {
+                output_path: root.path().into(),
+                consume_path: None,
+                job_info: json!({"name":"test","job_id":0}),
+                scan_settings: json!({}),
+            }],
+            ..Default::default()
+        });
+        assert!(!tomb.exists());
+        assert!(other.is_dir());
+        assert!(regular.is_file());
+    }
 
     #[test]
     fn scanner_config_change_is_durable_and_invalidates_old_sessions() {

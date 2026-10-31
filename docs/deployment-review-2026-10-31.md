@@ -1,99 +1,89 @@
-# Übergabe: Review-Implementierung vom 31.10.2026
+# Review-Rollout und Betreiberübergabe, 31.10.2026
 
-Dieser Auftrag bereitet Code und Dokumentation vor. **Kein Deployment**, kein
-Lesen oder Ändern produktiver Konfiguration und kein Backup-Lauf wurden dafür
-ausgeführt. Der vorherige Wartungsstand auf der VM bleibt davon getrennt.
+## Stand und erster Rollout des Nachtrags
 
-## Stand je Phase
+793db1c wurde am **31.10.2026 um 12:47:52 CET (11:47:52 UTC)** auf
+`/opt/nx-boss-rs` ausgerollt. Main-CI
+[41193945035](https://github.com/IngoMaindorfer/nx-boss-rs/actions/runs/41193945035)
+war vollständig grün.
 
-1. Ausgangsstand veröffentlicht: PR [#19](https://github.com/IngoMaindorfer/nx-boss-rs/pull/19), Merge `44a355d`; alle Branch- und Main-Prüfungen grün. TLS-Advisories behoben, eng begründete RSA-Ausnahme in `.cargo/audit.toml`; Warnungen basic-toml und unsafe-libyaml bleiben sichtbar.
-2. Einrichtungscode: Tastatur-Toggle, beim Abschicken wieder verdeckt, getrennte lokalisierte Fehler, Handy/Dark Mode geprüft.
-3. Admin nur mit Passkeys. Eine vorhandene `admin-auth.json` beendet den Start ausdrücklich. Scanner-Argon2 und Pepper bleiben erhalten.
-4. Scan-/Paperless-Wiederherstellung mit frischer Bestätigung; defekte und alte offene Scans sichtbar; JPEG-Header und CMYK, Job-DPI und Berliner Scandatum korrigiert.
-5. Tests benutzen die echten getrennten Router; Login-Grenzen, benannte widerrufbare Passkeys, Journal, Dateirechte, Cache/CSP/HSTS, Token-Aufräumen und Paperless-Pause umgesetzt. B20 bleibt wie entschieden unverändert.
-6. Homelab-Startdateien des alten Stacks entfernt, Verweise korrigiert. Homelab bleibt uncommittet. B07 ist ausschließlich ein Vorschlag im Review; B24 bleibt erhalten.
+- Image: `sha256:e09b03f4ea79e6f9b718c457f910623e5c30002e13224aaa737781862f433c69`, stabil getaggt als `nx-boss-rs:local`.
+- Rollback: `nx-boss-rs:pre-review-20261031` (`sha256:52911e07716de54583420697c23b80b14ae921896345831a06d0c7ce324a300f`).
+- Geschützte Sicherung: `/opt/nx-boss-rs/backups/pre-review-20261031/20261031T114733Z/`, Verzeichnis 0700, `source.tar` und `private.tar` 0600; private Inhalte nicht angesehen.
+- Vorprüfung 12:47:33 CET: keine Scan-Anfragen in 15 Minuten, kein laufender Export, nächster planmäßiger Export 14:00 CET.
+- Abnahme: beide Container healthy, laufendes Image stimmt, HTTP-Health und Admin-HTTPS 200, HSTS und CSP gesetzt, keine neuen ERROR-Events.
+- Footer `793db1c`: am unveränderten Binary desselben Images mit isolierter temporärer Konfiguration und virtuellem Test-Passkey bestätigt. Kein produktiver Admin-Zugriff oder Auth-Bypass.
 
-Die Antworten unter jedem Befund im [Review](review-2026-10-31.md) nennen
-Code-Commits und Regressionstests. Die Implementierung ist in [PR #24](https://github.com/IngoMaindorfer/nx-boss-rs/pull/24)
-nach zwei vollständig grünen CI-Läufen gemergt (b637763). Der direkte
-Main-CI-Lauf ist [41193238821](https://github.com/IngoMaindorfer/nx-boss-rs/actions/runs/41193238821).
-Der Baseline-Nachweis ist [41190318861](https://github.com/IngoMaindorfer/nx-boss-rs/actions/runs/41190318861);
-die zuvor versehentlich genannten IDs waren erfolgreiche Dependabot-Läufe.
+Der Admin ist laut Nachprüfung seit 31.10., 09:50 Uhr eingerichtet.
+Der Betreiber muss einen Ersatz-Passkey ergänzen und die Scanner-Zugangsdaten
+rotieren. Die möglicherweise aktive Datei `scanner-auth-probe-password` bleibt
+unangetastet. Es gab keinen physischen Testscan in diesem Rollout.
 
-## Deployment durch den Betreiber
+## Verbindliches Verfahren für weitere Rollouts
 
-1. Nach grüner Main-CI die gewünschte Main-Revision festhalten. Vorher auf der VM
-   `/opt/nx-boss-rs` Image-ID/Tag, Compose-Datei und `deploy/Caddyfile` privat für
-   Rollback sichern. Einen konsistenten, zugriffsgeschützten Backupstand von
-   `config/`, `scans/`, `.env`, `secrets/` und `caddy-acme/` bereithalten; Eigentümer
-   und Rechte erhalten. Auf laufende Scans warten. Nicht aus diesem Auftrag
-   einen neuen oder veränderten Export ableiten.
-2. Ausschließlich versionierte Quellen dieser Revision übertragen, etwa mit
-   `git archive`, in ein separates Build-Verzeichnis auf der VM. Dort das Image
-   vor dem eigentlichen Stopp bauen; private Laufzeitdateien nicht hineinkopieren:
-
-   ```sh
-   # Im entpackten Quellstand; hier den vollständigen gewählten Commit einsetzen.
-   nx_review_revision=COMMIT_SHA
-   docker build --target app --build-arg GIT_SHA="$nx_review_revision" \
-     -t "nx-boss-rs:review-$nx_review_revision" .
-   ```
-
-3. Den geprüften Quellstand und seine Compose-/Caddy-Dateien nach dem bisherigen
-   Verfahren unter `/opt/nx-boss-rs` installieren, private Dateien erhalten.
-   Kein pauschales Löschen/Synchronisieren mit `--delete`. Die alten Templates
-   `templates/admin_setup_confirm.html` und `templates/account_totp.html` gehören
-   nicht mehr zum Quellstand. Der Build bettet seine Templates bereits ein.
-   Den verwendeten Image-Tag privat als `NX_BOSS_IMAGE` für spätere Compose-Aufrufe
-   festhalten. Domain, Ports und bisherigen Scanner-Modus erhalten;
-   `NX_BOSS_TIMEZONE` ist optional und standardmäßig `Europe/Berlin`.
-4. In `/opt/nx-boss-rs` mit dem neuen Image kontrolliert neu erstellen; Caddy muss
-   für die neue HSTS-Konfiguration ebenfalls neu starten. Der Caddy-Imagebuild
-   selbst hat sich gegenüber Phase 1 nicht geändert:
+1. Ausschließlich einen Commit von main mit grüner Main-CI verwenden. Mit
+   `git archive COMMIT` übertragen und in einem separaten Build-Verzeichnis
+   entpacken. Private Laufzeitdateien gehören nicht in den Build.
+2. Vor dem Stopp aus redigierten Logs belegen, dass in den letzten 15 Minuten
+   keine `/NmWebService/batch`- oder `/NmWebService/image`-Anfragen vorkamen.
+   Exportprozesse mit `ps -eo args | grep '[r]estic-export'` prüfen, kein `pgrep -f`
+   über SSH. Der nächste Lauf laut PVE-Timer muss mindestens 15 Minuten entfernt
+   sein; Startfenster mit bis zu 15 Minuten Zufallsverzögerung berücksichtigen.
+3. Image im Build-Verzeichnis mit korrektem GIT_SHA bauen:
 
    ```sh
-   NX_BOSS_IMAGE="nx-boss-rs:review-$nx_review_revision" \
-     docker compose up -d --no-build --force-recreate --wait --wait-timeout 180 nx-boss-rs caddy
-   docker compose ps
-   curl --fail --silent --show-error http://192.168.178.92:20447/health
-   curl --fail --silent --show-error -I https://nx.maindorfer.name/login
+   nx_revision=VOLLSTAENDIGER_MAIN_COMMIT
+   docker build --target app --build-arg GIT_SHA="$nx_revision" \
+     -t "nx-boss-rs:review-$nx_revision" .
    ```
 
-   Falls `admin-auth.json` existiert, den klaren Startfehler beachten: Datei privat
-   sichern und deren Entfernung bewusst als Betreiber entscheiden. Kein
-   automatisches Löschen, kein stiller neuer Admin neben dem alten Konto.
-5. Footer auf die gewählte Revision prüfen. Browser: `/setup` beziehungsweise
-   `/login`, Konto und Wiederherstellung, Cache-Control `private, no-store`, CSP
-   `form-action 'self'` und HSTS prüfen. Scanner-Login über HTTPS `:20448`, Jobs
-   und harmlosen physischen Scan bis zur bestätigten Paperless-Dokument-ID prüfen.
-   Bei pausierter Zustellung `/settings/paperless` korrigieren und speichern;
-   keine unkontrollierten Wiederholungen eines unklaren Imports.
+4. Laufendes Image vor dem Wechsel datiert als `nx-boss-rs:pre-THEMA-YYYYMMDD`
+   taggen. Nur die App geordnet stoppen. Danach den bisherigen Quellstand und
+   private Daten ungelesen in getrennte geschützte Tars unter `backups/` sichern;
+   Eigentümer und Rechte erhalten. Sicherung selbst nicht ins Quell-Tar aufnehmen.
+5. Versionierte Dateien ohne `--delete` einspielen. Bestehende Verzeichnisrechte
+   von `/opt/nx-boss-rs` nicht überschreiben (`tar --no-overwrite-dir`). Entfallene
+   Quell-/Template-Dateien gezielt entfernen. `.env`, Inhalte von `config/`,
+   `secrets/`, `scans/` und ACME-Daten nicht überschreiben.
+6. Neues Image **dauerhaft auf `nx-boss-rs:local` taggen**, dann im aktiven Stack:
 
-## Rollback
+   ```sh
+   docker image tag "nx-boss-rs:review-$nx_revision" nx-boss-rs:local
+   cd /opt/nx-boss-rs
+   docker compose up -d --no-build --force-recreate --wait --wait-timeout 180 nx-boss-rs caddy
+   ```
 
-Den vorher gesicherten Image-Tag sowie passende Compose-/Caddy-Dateien wieder
-verwenden. Im aktiven Stack:
+   Kein vorübergehendes `NX_BOSS_IMAGE` verwenden: spätere normale Compose-Aufrufe
+   müssen denselben neuen Stand starten. `.env` wird durch diesen Auftrag nicht
+   verändert. Domain, Ports, Scanner-Modus und Pepper erhalten.
+7. Beide Container müssen healthy sein und die App muss die erwartete Image-ID
+   verwenden. Health auf HTTP :20447 und Admin-HTTPS, HSTS, CSP, neue ERROR-Events
+   und Footer-Revision prüfen. Für einen eingerichteten Admin wird kein virtueller
+   Passkey auf Produktion erzeugt; der identische Image-Footer kann isoliert
+   geprüft werden, die echte Anmeldung bleibt Betreiberprüfung.
+8. Bei fehlgeschlagener Abnahme sofort Rollback: ausschließlich Compose und
+   `deploy/Caddyfile` aus dem Quell-Tar zurückholen, das gesicherte pre-Image auf
+   `nx-boss-rs:local` taggen und denselben `up`-Befehl ausführen. Aktuelle
+   `config/`, `scans/`, Secrets und ACME-Daten **nicht zurückspielen**. Anschließend
+   Gesundheit des alten Stands prüfen; bei fehlschlagendem Rollback anhalten.
 
-```sh
-NX_BOSS_IMAGE=VORHER_GESICHERTER_IMAGE_TAG \
-  docker compose up -d --no-build --force-recreate --wait --wait-timeout 180 nx-boss-rs caddy
-```
+Jede abgelehnte Sicherheits- oder Berechtigungsprüfung stoppt die Arbeit. Keine
+Umgehung oder Zerlegung des abgelehnten Schritts. Paperless, andere Stacks,
+Backup-Läufe und Scanner-Rotation sind hier keine Deployment-Aktionen.
 
-Aktuelle `config/`, Pepper, API-Token, ACME-Daten und insbesondere seit dem Update
-entstandene Scans behalten. Kein altes Scanbackup über neuere Daten kopieren.
-Neuere Passkey-Namen sind zusätzliche Metadaten; ein alter Stand bietet keinen
-Widerruf. Ein ausdrücklich entfernter Schlüssel darf durch Wiederherstellen
-alter Auth-Dateien nicht wieder gültig werden. Auf einen Stand vor Einführung
-der Admin-Absicherung nur mit gesperrtem Adminzugriff zurückgehen. Health,
-Scanner-Neuanmeldung und ausstehende Zustellungen danach prüfen. Das auf der VM
-vorhandene Wartungs-Rollback `nx-boss-rs:pre-dependencies-20261031` ist älter als
-dieser Review-Ausgangsstand; bevorzugt das unmittelbar vorher gesicherte Image.
+## Zweiter Rollout und Betreiberprüfungen
 
-## Nur der Betreiber kann noch erledigen
+Der zweite Rollout des Nachtrags wird nach grüner Main-CI mit Uhrzeit, Commit,
+Image-ID und `pre-trust-YYYYMMDD`-Tag ergänzt. Bei einem späteren Rollback auf
+793db1c wird die neue Trusted-Devices-Datei ignoriert; Geräte melden sich wieder
+mit Passkey an. Kein älteres Auth-Backup restaurieren, das widerrufene Schlüssel
+oder Geräte erneut gültig machen würde.
 
-- Eigenen Admin und einen benannten Ersatz-Passkey über `/setup` und `/account` einrichten.
-- Scanner-Zugangsdaten rotieren (B12), Altwerte nach Prüfung privat entfernen.
-- fi-7300NX nach einer 401 und nach Neustart mitten im Scan physisch prüfen (B02); automatisierte Tests decken die API mit Neuanmeldung ab.
-- Harmlosen physischen Testscan bis Paperless 3.4.0 bestätigen.
-- B07: Backup-Vorschlag und Messung bei einem freigegebenen Export entscheiden.
-- B24: Fortsetzung oder Ende der NFC-Messung entscheiden; Probe-Code bleibt bis dahin.
+Danach beim Betreiber:
+
+- Gerätevertrauen mit echtem Passkey und Widerruf unter `/account` prüfen.
+- Ersatz-Passkey ergänzen.
+- Scanner-Zugangsdaten rotieren (B12), anschließend alte Passwortdatei bewusst entfernen.
+- Physischen Testscan bis Paperless 3.4.0 durchführen.
+- fi-7300NX nach 401 und nach Neustart mitten im Scan prüfen (B02).
+- B07-Konzept entscheiden; dieses verändert den Export noch nicht.

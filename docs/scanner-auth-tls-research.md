@@ -1,3 +1,10 @@
+# Ende der NFC-Messung (Nachtrag 31.10.2026)
+
+NFC funktioniert im Scanner nicht; der Betreiber hat die Messung beendet.
+Temporärer Server-Probe-Code sowie die allein zur Protokollmessung dienenden
+Clients `scripts/probe_sides.py` und `scripts/rev.py` werden entfernt. Die folgenden
+Messprotokolle sind historisch, keine Anleitung zur Wiederaktivierung der Flags.
+
 # fi-7300NX: Anmeldung und HTTPS (Recherche und Gerätetest, 2026-09-30)
 
 ## Offene Modus-Matrix (2026-10-01)
@@ -75,13 +82,12 @@ Nächste Messfolge für die übrigen Methoden: Im originalen NX Manager jeweils 
 | `NX_BOSS_SCANNER_AUTH_MODE` | private VM-`.env` | `none` für bisherige Anmeldung ohne Credentials; `userpass` für die neue lokale Scanner-Anmeldung |
 | `NX_BOSS_SCANNER_USERNAME` | private VM-`.env` | dedizierter Scanner-Testbenutzer; den Wert nicht in Logs oder Doku schreiben |
 | `NX_BOSS_SCANNER_PASSWORD_FILE` | private VM-`.env` | derzeit `/config/scanner-auth-probe-password`; private Klartextdatei unter `/opt/nx-boss-rs/config/`, Modus `0600` |
-| `NX_BOSS_SCANNER_AUTH_PROBE` | private VM-`.env` | Nur bei gezielter Diagnose `1`; im Normalbetrieb `0`, damit keine Match-Booleans geloggt werden |
 
 Die Passwortdatei muss eine reguläre, für die App-UID lesbare Datei mit Modus `0600` oder `0400` sein. Das Passwort gehört **nicht** in `.env`, Compose, Logs oder diese Doku. Vor den Umschaltungen wurden frühere `.env`-Versionen privat unter `backups/` gesichert. Fehlt bei `userpass` eine Quelle, startet nx-boss nicht. Der Benutzername und das Passwort sind aktuell Wegwerf-Testdaten; vor Dauereinsatz durch ein starkes dediziertes Passwort ersetzen. Die Scanner-Anmeldung ist unabhängig von einem späteren Admin-Login.
 
-1. **Bereits erledigt:** Die VM wurde mit privaten Wegwerf-Testdaten und `NX_BOSS_SCANNER_AUTH_MODE=userpass` vorbereitet. Die physische JSON-Struktur wurde ohne Wertprotokollierung bestätigt. Nach dem Rollout der Anmeldung `NX_BOSS_SCANNER_AUTH_PROBE=0` setzen und einen Login mit anschließendem unkritischem Testscan auslösen.
+1. Die Messung ist beendet: NFC funktioniert im Scanner nicht. Der Nachtrag vom 31.10.2026 entfernt die temporären Diagnosepfade und beide Flags; sie lassen sich nicht wieder aktivieren. Der normale `userpass`-Ablauf bleibt erhalten. Die Datei `scanner-auth-probe-password` kann trotz ihres Namens aktiv sein und wird nicht entfernt.
 2. Am fi-7300NX die bestehende Verbindung `nx.maindorfer.name:20448` mit HTTPS beibehalten. Der Weg zu Auto Login lautet laut [Ricoh Operator's Guide, S. 230 und 240–241](https://origin.pfultd.com/downloads/IMAGE/manual/fi-7300nx/P3PC-6192-13ENZ2.pdf): **Zahnrad unten rechts → Scanner Settings → Network → Server → PaperStream NX Manager → Auto Login/Logout → Auto Login → Username/Password**. Die Zugangsdaten unter **Proxy Server → Authentication** sind hierfür falsch. Den Scanner abmelden und neu anmelden oder neu starten. „Verbindung prüfen“ allein muss keinen Login-POST auslösen.
-3. In den App-Logs nur die reduzierten Felder `timestamp`, `event`, `auth_scheme`, `body_format`, `known_fields`, `unknown_field_count`, `schema_fields`, `auth_info_user_type`, `auth_info_pass_type`, `auth_info_user_match`, `auth_info_pass_match`, `http_route` und `http_status` aus `scanner.auth_probe` und `http.request` betrachten. **Keine rohen Logs, Header, Bodies, Token oder Credential-Werte ausgeben.** Die Typfelder unterscheiden nur JSON-Typen; die Match-Felder werden nur gegen die konfigurierten Wegwerf-Testdaten geprüft und geben ausschließlich Boolesche Werte zurück. `schema_fields` zeigt nur gefilterte schemaartige Top-Level-Schlüssel; ein leeres Feld beweist nicht, dass es keine Zugangsdaten gibt. `scripts/test_logging.py` prüft mit synthetischen Geheimnissen, dass Werte nicht im Log landen.
+3. Nur redigierte `http.request`-Status und feste Login-Ereignisse prüfen; keine Header, Bodies, Token oder Credential-Werte ausgeben. Die normale Secret-Redaktion wird weiterhin durch `scripts/test_logging.py` über echte Login- und Scanpfade geprüft.
 4. Nach dem Rollout am Gerät ab- und erneut anmelden; im strukturierten App-Log nur `scanner.login_succeeded` und HTTP-Status ansehen, keine rohen Nutzdaten. Anschließend einen unkritischen Testscan starten und Jobliste, Batch, Bilder, PDF und Paperless-Verarbeitung prüfen. Fehlversuche liefern 401 ohne Jobs/Token; fünf Fehlversuche sperren eine Minute.
 5. Die Datei ist noch Klartext, wenn auch privat und ohne Logausgabe. Für dauerhaften Betrieb Passwort-Hashing, Rotation und einen Admin-Login gesondert härten. HTTP/20447 verweigert im `userpass`-Modus das Anmeldeangebot und verarbeitet keine Anmeldung; das Gerät muss auf HTTPS/20448 eingestellt bleiben.
 
@@ -89,6 +95,6 @@ Ein HTTP-Basic-Challenge-Experiment wäre ein separater Test; ein Basic-Header i
 
 ## Rollout 2026-10-01: Hash statt privater Klartextdatei
 
-Auf der Docker-VM wurde der frühere `userpass`-Teststand mit `--migrate-scanner-auth` nach `config/config.yaml` überführt. Dort liegt nur noch ein Argon2id-PHC-Hash mit individuellem Salt. Der getrennte 32-Byte-Pepper liegt als privates Compose-Secret unter `secrets/auth_pepper`. Die alte Passwortdatei bleibt vorübergehend ausschließlich für einen Rollback erhalten; die YAML-Konfiguration hat Vorrang vor den Legacy-Umgebungsvariablen. Ein neuer Scanner-Passwortwechsel über `/settings/scanner` verlangt mindestens zwölf Zeichen sowie Admin-Passwort und frischen TOTP-Code und widerruft bestehende Scanner-Sitzungen. Der einmalige Migrationspfad konnte die kurzen Wegwerf-Testdaten hashen, ohne sie im Klartext in YAML, Log oder Tool-Ausgabe aufzunehmen.
+Auf der Docker-VM wurde der frühere `userpass`-Teststand mit `--migrate-scanner-auth` nach `config/config.yaml` überführt. Dort liegt nur noch ein Argon2id-PHC-Hash mit individuellem Salt. Der getrennte 32-Byte-Pepper liegt als privates Compose-Secret unter `secrets/auth_pepper`. Die alte Passwortdatei bleibt vorübergehend ausschließlich für einen Rollback erhalten; die YAML-Konfiguration hat Vorrang vor den Legacy-Umgebungsvariablen. Ein neuer Scanner-Passwortwechsel über `/settings/scanner` verlangt mindestens zwölf Zeichen sowie eine frische Admin-Passkey-Bestätigung und widerruft bestehende Scanner-Sitzungen. Der einmalige Migrationspfad konnte die kurzen Wegwerf-Testdaten hashen, ohne sie im Klartext in YAML, Log oder Tool-Ausgabe aufzunehmen.
 
 Nach dem Rollout waren App und Caddy gesund. Ein synthetischer Login über Caddy-HTTPS mit den bereits privat auf der VM gespeicherten Testdaten antwortete mit HTTP 200, einem echten Bearer und Jobs; dabei wurden weder Zugangsdaten noch Token ausgegeben. Der physische fi-7300NX-Login und ein unkritischer Scan bis zum bestätigten Paperless-Dokument wurden anschließend am 2026-10-01 verifiziert (siehe oben). Die Admin-Oberfläche ist bis zur einmaligen Einrichtung unter `https://nx.maindorfer.name/setup` gesperrt; der private Einrichtungscode liegt in `config/admin-setup-token` auf der VM.

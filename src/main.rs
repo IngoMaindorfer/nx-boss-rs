@@ -71,8 +71,10 @@ mod event_log;
 mod logging;
 mod paperless;
 mod pdf;
+mod recovery;
 mod retention;
 mod routes;
+mod scan_date;
 mod scanner_auth;
 mod security;
 mod state;
@@ -184,18 +186,6 @@ async fn run(event_log: event_log::EventLog) -> Result<()> {
     } else {
         scanner_auth::ScannerAuthMode::from_env()?
     };
-    let scanner_auth_experiment = match std::env::var("NX_BOSS_SCANNER_AUTH_EXPERIMENT") {
-        Err(std::env::VarError::NotPresent) => None,
-        Ok(value) if value.is_empty() => None,
-        Ok(value) if value == "job" => {
-            ensure!(
-                scanner_auth_mode.requires_login(),
-                "scanner diagnostic requires userpass protection"
-            );
-            Some("job")
-        }
-        _ => anyhow::bail!("unsupported scanner diagnostic mode"),
-    };
     let paperless_client =
         config
             .paperless
@@ -258,13 +248,6 @@ async fn run(event_log: event_log::EventLog) -> Result<()> {
         );
     }
     state = state.with_scanner_auth_mode(scanner_auth_mode);
-    if let Some(wire_type) = scanner_auth_experiment {
-        state = state.with_scanner_auth_experiment(wire_type);
-        warn!(
-            event = "scanner.auth_experiment_enabled",
-            "fail-closed scanner authentication diagnostic enabled"
-        );
-    }
     if let Some(path) = std::env::var_os("NX_BOSS_OUTPUT_PATH") {
         state = state.with_default_output_path(PathBuf::from(path));
     }

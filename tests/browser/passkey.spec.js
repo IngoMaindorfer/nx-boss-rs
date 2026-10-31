@@ -241,6 +241,19 @@ test('passkey setup, login, replay rejection, and sensitive change', async ({ pa
   expect(opened.status()).toBe(200);
   const batchId = (await opened.json()).batch_id;
   await page.goto(`${origin}/scans/${batchId}`);
+  await expect(page.getByRole('button', { name: 'Abschließen und zustellen', exact: true })).toHaveCount(0);
+  // Isolated fixture: simulate an idle scan after the in-memory sweep.
+  const batchMetaPath = path.join(directory, 'scans', batchId, 'metadata.json');
+  const batchMeta = JSON.parse(fs.readFileSync(batchMetaPath, 'utf8'));
+  batchMeta.created_at = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  fs.writeFileSync(batchMetaPath, JSON.stringify(batchMeta));
+  const recoveryExit = new Promise((resolve) => app.once('exit', resolve));
+  app.kill('SIGTERM'); await recoveryExit; app = startApp();
+  await waitFor('http://127.0.0.1:12547/health');
+  await page.goto(`${origin}/login`);
+  await page.getByRole('button', { name: 'Mit Passkey anmelden' }).click();
+  await expect(page).toHaveURL(`${origin}/`);
+  await page.goto(`${origin}/scans/${batchId}`);
   await page.getByRole('button', { name: 'Abschließen und zustellen', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Abschließen und zustellen', exact: true })).toHaveCount(0);
   expect(JSON.parse(fs.readFileSync(path.join(directory, 'scans', batchId, 'metadata.json'), 'utf8')).completed).toBe(true);

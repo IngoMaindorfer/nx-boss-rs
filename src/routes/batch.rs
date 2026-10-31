@@ -1,24 +1,21 @@
 use axum::{
     Json,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::IntoResponse,
 };
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use tracing::{info, warn};
 
-use super::scanner;
 use crate::batch::{Batch, ScannerInfo};
 use crate::lock;
 use crate::state::AppState;
 
 pub async fn post_batch(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    scanner::log_scan_json_probe("batch", &headers, &body);
     // Scanner may send job_id as integer or string
     let job_id = match body.get("job_id") {
         Some(Value::Number(n)) => match n.as_u64().and_then(|id| usize::try_from(id).ok()) {
@@ -129,9 +126,7 @@ pub async fn post_batch(
 pub async fn put_batch(
     Path(batch_id): Path<String>,
     State(state): State<AppState>,
-    headers: HeaderMap,
 ) -> impl IntoResponse {
-    scanner::log_scan_bytes_probe("batch_complete", &headers, &[]);
     // A per-batch lock serializes upload and completion without holding the map lock.
     let batch = match lock!(state.batches).get(&batch_id).cloned() {
         Some(b) => b,

@@ -18,7 +18,7 @@ The scanner HTTPS port is `20448`. Firmware `0T00` passed “Verbindung prüfen�
 
 ## First admin setup and scanner credential rotation
 
-1. On the operator's own workstation, read the private one-time code with `ssh -F /home/ingo/.ssh/config docker 'cat /opt/nx-boss-rs/config/admin-setup-token'`. Do not paste the code into tickets, chat, logs, or shell history. Open `https://nx.maindorfer.name/setup`, choose an Admin name, and register a Passkey using the device's PIN or biometric confirmation. Successful setup deletes the one-time token. Under **Settings → Admin account**, register a second passkey on another device as recovery. See [Passkey operations](admin-passkeys.md).
+1. The Admin is already enrolled (operator follow-up, 2026-10-31 09:50). Sign in at `https://nx.maindorfer.name/login` with the real passkey and add a **second passkey on another device** under `/account`. Do not reset the enrolled account or look for an initial setup code. A new installation alone uses `/setup`; see [Passkey operations](admin-passkeys.md).
 2. While logged in, open **Settings → Scanner authentication** (`/settings/scanner`). Keep `userpass`; replace the disposable scanner username and password with a unique scanner-only account. The form requires a fresh Admin passkey confirmation and revokes all scanner sessions. Use HTTPS on port `20448` at the device, update its saved Auto Login username/password, then sign in again and confirm the jobs are visible. A harmless scan verifies the new credentials end to end.
 3. After that verification, remove the obsolete `NX_BOSS_SCANNER_AUTH_MODE`, `NX_BOSS_SCANNER_USERNAME`, and `NX_BOSS_SCANNER_PASSWORD_FILE` values from the private VM `.env` and remove the old private test password file. The YAML hash and separate pepper are the active source. Recreate only nx-boss so its process environment no longer contains the legacy values, then verify `auth_type:userpass`, scanner login, and container health. Keep any rollback material in private `backups/`, never in Git or the Docker build context.
 
@@ -32,11 +32,11 @@ Back up `config/`, `scans/`, `.env`, `secrets/cloudflare_api_token`, `secrets/au
 
 ## Deployment readiness
 
-The Compose stack has private pre-created bind mounts, a read-only application root, non-root UID/GID, dropped capabilities, a healthcheck, restart policy, bounded JSON logs, and a 180-second stop grace period. Admin passkeys and scanner `userpass` are implemented. On 2026-10-01, a physical fi-7300NX scan after the hash/pepper migration produced a completed two-page batch and a Paperless document confirmed by an authenticated read-only API GET; see [the scanner test record](scanner-auth-tls-research.md). The Admin passkey still needs to be enrolled by the operator, and disposable scanner credentials still need rotation. The project is intended for LAN-only deployment. Paperless delivery has no formal exactly-once guarantee. A power cut can still interrupt filesystem writes or leave an upload outcome ambiguous.
+The Compose stack has private pre-created bind mounts, a read-only application root, non-root UID/GID, dropped capabilities, a healthcheck, restart policy, bounded JSON logs, and a 180-second stop grace period. Admin passkeys and scanner `userpass` are implemented. On 2026-10-01, a physical fi-7300NX scan after the hash/pepper migration produced a completed two-page batch and a Paperless document confirmed by an authenticated read-only API GET; see [the scanner test record](scanner-auth-tls-research.md). The Admin is enrolled; a backup passkey and rotation of disposable scanner credentials remain operator tasks. The project is intended for LAN-only deployment. Paperless delivery has no formal exactly-once guarantee. A power cut can still interrupt filesystem writes or leave an upload outcome ambiguous.
 
 ## Reproducible build identity
 
-Build from a committed revision with `GIT_SHA=$(git rev-parse HEAD) docker compose build nx-boss-rs`.
+Follow the [rollout procedure](deployment-review-2026-10-31.md): build a green main revision in a separate directory, then tag the result as `nx-boss-rs:local` before the ordinary Compose up. Always pass `--build-arg GIT_SHA=COMMIT` to the image build.
 Compose forwards the revision to Docker; GitHub CI and releases pass `github.sha`.
 An unspecified local build is labelled `unknown`, never claimed to be a committed revision.
 The security-audit exception and its limited public-key-only RSA path are documented
@@ -56,7 +56,7 @@ after a 401 still requires the operator's physical test.
 ## Changes ready for operator deployment, 31 October 2026
 
 [Deployment and rollback handoff](deployment-review-2026-10-31.md) records the
-review implementation. This work does not deploy or modify VM configuration.
+review implementation. 793db1c was deployed on 2026-10-31 12:47:52 CET; deployment metadata is in the handoff. Private runtime configuration was not edited.
 Admin HTML and images use `private, no-store`; CSP limits form submissions to
 self, and Caddy sends HSTS on its TLS listeners. Scanner device registration has
 a 16 KiB body limit and bounded fields; its observed unauthenticated wire contract
