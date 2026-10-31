@@ -6,10 +6,14 @@ const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 const origin = 'https://localhost:12649';
 let directory, app, proxy, client, authenticator;
-const startApp = () => spawn('./target/debug/nx-boss-rs', [
-  '--config', path.join(directory, 'config.yaml'), '--host', '127.0.0.1', '--port', '12647',
-  '--admin-host', '127.0.0.1', '--admin-port', '12648', '--admin-allowed-host', 'localhost',
-], { env: { ...process.env, NX_BOSS_AUTH_PEPPER_FILE: path.join(directory, 'pepper'), NX_BOSS_ADMIN_DOMAIN: 'localhost', NX_BOSS_ADMIN_HTTPS_PORT: '12649' }, stdio: 'ignore' });
+const startApp = () => {
+  const fd=fs.openSync(path.join(directory,'app.log'),'a',0o600);
+  const appProcess=spawn('./target/debug/nx-boss-rs', [
+    '--config', path.join(directory, 'config.yaml'), '--host', '127.0.0.1', '--port', '12647',
+    '--admin-host', '127.0.0.1', '--admin-port', '12648', '--admin-allowed-host', 'localhost',
+  ], { env: { ...process.env, NX_BOSS_LOG_LEVEL:'debug', NX_BOSS_AUTH_PEPPER_FILE: path.join(directory, 'pepper'), NX_BOSS_ADMIN_DOMAIN: 'localhost', NX_BOSS_ADMIN_HTTPS_PORT: '12649' }, stdio: ['ignore',fd,fd] });
+  fs.closeSync(fd);return appProcess;
+};
 async function waitFor() {
   for (let n=0;n<100;n++) { try { if ((await fetch('http://127.0.0.1:12647/health')).ok) return; } catch (_) {} await new Promise(r=>setTimeout(r,100)); }
   throw new Error('isolated trust server not healthy');
@@ -56,7 +60,8 @@ test('trusted sessions persist, expire, require step-up and can be revoked', asy
   test.setTimeout(90000);
   const storePath=path.join(directory,'admin-trusted-devices.json');
   const devices=()=>JSON.parse(fs.readFileSync(storePath,'utf8')).devices;
-  const cookie=async()=> (await context.cookies(origin)).find(c=>c.name==='__Host-nx-trust');
+  const seenTokens=new Set();
+  const cookie=async()=> {const value=(await context.cookies(origin)).find(c=>c.name==='__Host-nx-trust');if(value)seenTokens.add(value.value);return value;};
   const login=async(trusted,name='Laptop')=>{
     await page.goto(`${origin}/login`);
     if(trusted) await page.locator('[name=trust_device]').check();
@@ -120,4 +125,7 @@ test('trusted sessions persist, expire, require step-up and can be revoked', asy
   await page.goto(`${origin}/account`);await expect(page).toHaveURL(`${origin}/login`);expect(Boolean(await cookie())).toBe(false);
   fs.writeFileSync(storePath,'broken-json');await restart();
   await login(false);expect(Boolean(await cookie())).toBe(false);
+  const logs=fs.readFileSync(path.join(directory,'app.log'),'utf8');
+  const journal=fs.readFileSync(path.join(directory,'system-events.json'),'utf8');
+  for(const token of seenTokens) {expect(logs.includes(token)).toBe(false);expect(journal.includes(token)).toBe(false);}
 });
