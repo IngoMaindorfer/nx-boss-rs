@@ -51,9 +51,16 @@ test.beforeAll(async () => {
   ], { stdio: 'ignore' });
 });
 
+async function stopFixtureProcess(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise((resolve) => child.once('exit', resolve));
+  child.kill('SIGTERM');
+  await exited;
+}
+
 test.afterAll(async () => {
-  proxy?.kill();
-  app?.kill();
+  // Shutdown flushes the journal; wait before removing its temporary directory.
+  await Promise.all([stopFixtureProcess(proxy), stopFixtureProcess(app)]);
   if (directory) fs.rmSync(directory, { recursive: true, force: true });
 });
 
