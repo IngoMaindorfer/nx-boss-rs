@@ -2,7 +2,7 @@
 /target
 
 # Local runtime config — use examples/config.yaml as template
-config.yaml
+/config.yaml
 config/
 .env
 .env.*

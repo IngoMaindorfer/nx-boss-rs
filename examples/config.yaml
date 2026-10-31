@@ -1,0 +1,27 @@
+jobs:
+  # Job name appears on the scanner's display
+  Scan to PDF:
+    output_path: ./scans
+    color: '#2196F3'
+    # Optional: override scan settings (all keys map into defaults.yaml)
+    # scan_settings:
+    #   pixelFormats:
+    #     resolution: 600
+    #     jpegQuality: 90
+
+  Scan Archive:
+    output_path: ./scans
+    color: '#4CAF50'
+    scan_settings:
+      pixelFormats:
+        resolution: 300
+        compression: jpeg
+        jpegQuality: 80
+
+# Optional Paperless-ngx v3 API delivery for completed batches.
+# Set PAPERLESS_API_TOKEN in the environment of docker compose.
+# paperless:
+#   url: http://paperless-host:8000/api/documents/post_document/
+#   token_env: PAPERLESS_API_TOKEN
+#   tag_ids: [1]            # e.g. the Paperless inbox tag ID
+#   batch_id_field_id: 2    # optional text custom field ID for the batch UUID

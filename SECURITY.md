@@ -23,4 +23,4 @@ You will receive a response within 7 days. If the issue is confirmed, a patch wi
 
 ## Scope
 
-nx-boss-rs is designed for **trusted internal LAN use only** and should never be exposed to the internet. The relevant threat model is documented in the [README](README.md#scanner-authentication).
+nx-boss-rs is designed for **trusted internal LAN use only** and should never be exposed to the internet. The relevant threat model is documented in the [README](README.md#security-status).
