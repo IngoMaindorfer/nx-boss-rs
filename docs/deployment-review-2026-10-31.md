@@ -73,8 +73,35 @@ Backup-Läufe und Scanner-Rotation sind hier keine Deployment-Aktionen.
 
 ## Zweiter Rollout und Betreiberprüfungen
 
-Der zweite Rollout des Nachtrags wird nach grüner Main-CI mit Uhrzeit, Commit,
-Image-ID und `pre-trust-YYYYMMDD`-Tag ergänzt. Bei einem späteren Rollback auf
+Der zweite Rollout wurde am **31.10.2026 um 14:48:42 CET (13:48:42 UTC)**
+abgenommen. Ausgerollt ist Main-Commit
+`163c2e5f25ba85746d5e37a1ddefa00fd53f7b7a` nach vollständig grüner
+[Main-CI 41206459824](https://github.com/IngoMaindorfer/nx-boss-rs/actions/runs/41206459824).
+
+- Image: `sha256:a7af248804b191f970b65d76f94c68923807de93cdfdc6b510d59612370ce168`, dauerhaft `nx-boss-rs:local`.
+- Rollback: `nx-boss-rs:pre-trust-20261031`, Image `sha256:e09b03f4ea79e6f9b718c457f910623e5c30002e13224aaa737781862f433c69`.
+- Sicherung: `/opt/nx-boss-rs/backups/pre-trust-20261031/20261031T134826Z/`, Verzeichnis 0700, beide Tars 0600; private Inhalte ungelesen.
+- Guard 14:48:26 CET: null Scan-Anfragen in 15 Minuten, kein Exportprozess, nächster Planlauf 18:00 CET. Der vorherige reguläre Export wurde vollständig abgewartet.
+- Beide Container healthy, laufendes App-Image identisch, Health und Admin-HTTPS 200, HSTS/CSP gesetzt, seit Wechsel je null ERROR in App und Caddy.
+- Footer `163c2e5` am exakten Image isoliert mit temporären Daten/Test-Passkey bestätigt. Produktives `/login` bietet Gerätevertrauen standardmäßig ausgeschaltet und optionalen Gerätenamen. Echte Anmeldung/Widerruf bleibt Betreiberprüfung.
+- Nur nx-boss-rs und Caddy neu erstellt. Keine privaten Inhalte angesehen oder manuell geändert, kein manueller Export, keine Scanner-Rotation, keine Änderung in Homelab oder am Backup.
+
+**Phasen:** 1 und 4 ausgerollt; 2 (N1–N3/B24) und 3 (F2) implementiert und geprüft;
+5 liefert das [B07-Konzept](backup-konzept-nx-boss.md) zur Freigabe. Der bestehende
+Backupstopp ist noch nicht behoben. Der reproduzierbare isolierte API-Ausfalltest
+`scripts/test_paperless_outage.py` bestätigt zwei lokale Scans während 503,
+genau zwei spätere erfolgreiche Uploads und dieselbe Scanner-Sitzung.
+
+**Ehrliche Testgrenze:** Main-CI von `67195bd` schlug beim Aufräumen der alten
+Passkey-Fixture mit ENOTEMPTY fehl, nachdem die eigentlichen Tests bestanden.
+`9079247` wartet auf das Prozessende vor Verzeichnislöschung; beide Branch-CIs
+und die Main-CI des ausgerollten `163c2e5` sind vollständig grün. Lokal zuletzt
+247 Rust-Tests, 17 Browser-Tests und volle bisherige DoD grün. Der B07-Nachweis
+wurde anschließend erneut in seiner veröffentlichten Fassung erfolgreich geprüft.
+Die nachfolgenden Konzept-/Test-/Übergabe-Commits ändern keine Laufzeitquellen;
+sie benötigen kein drittes Deployment.
+
+Bei einem späteren Rollback auf
 793db1c wird die neue Trusted-Devices-Datei ignoriert; Geräte melden sich wieder
 mit Passkey an. Kein älteres Auth-Backup restaurieren, das widerrufene Schlüssel
 oder Geräte erneut gültig machen würde.
