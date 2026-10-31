@@ -109,7 +109,7 @@ test('passkey setup, login, replay rejection, and sensitive change', async ({ pa
   });
   const client = await context.newCDPSession(page);
   await client.send('WebAuthn.enable');
-  await client.send('WebAuthn.addVirtualAuthenticator', { options: {
+  const { authenticatorId: primaryAuthenticator } = await client.send('WebAuthn.addVirtualAuthenticator', { options: {
     protocol: 'ctap2', transport: 'internal', hasResidentKey: true,
     hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true,
   } });
@@ -125,12 +125,14 @@ test('passkey setup, login, replay rejection, and sensitive change', async ({ pa
     } });
   });
   await page.locator('[name=username]').fill('browser-admin');
+  await page.locator('[name=passkey_name]').fill('Laptop');
   await page.getByRole('button', { name: 'Passkey erstellen' }).click();
   await expect(page).toHaveURL(`${origin}/`);
   expect(await page.evaluate(() => sessionStorage.getItem('setupWasHidden'))).toBe('true');
   await expect(page.locator('[data-passkey-error]')).toHaveCount(0);
   expect(fs.existsSync(path.join(directory, 'admin-passkeys.json'))).toBe(true);
   expect(fs.existsSync(path.join(directory, 'admin-setup-token'))).toBe(false);
+  const originalSession = (await context.cookies()).find((cookie) => cookie.name === '__Host-nx-admin').value;
   for (const pathname of ['/login', '/setup/prepare', '/setup/complete', '/account', '/account/totp/prepare', '/account/totp/complete']) {
     const removed = await context.request.post(`${origin}${pathname}`, { headers: { origin }, data: {}, failOnStatusCode: false });
     expect([404, 405]).toContain(removed.status());
@@ -138,13 +140,15 @@ test('passkey setup, login, replay rejection, and sensitive change', async ({ pa
 
 
   await page.goto(`${origin}/account`);
+  let backupAuthenticator;
   await page.route('**/passkey/account/add/start', async (route) => {
-    await client.send('WebAuthn.addVirtualAuthenticator', { options: {
+    ({ authenticatorId: backupAuthenticator } = await client.send('WebAuthn.addVirtualAuthenticator', { options: {
       protocol: 'ctap2', transport: 'usb', hasResidentKey: true,
       hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true,
-    } });
+    } }));
     await route.continue();
   });
+  await page.locator('[name=passkey_name]').fill('USB-Ersatz');
   await page.getByRole('button', { name: 'Weiteren Passkey hinzufügen' }).click();
   try {
     await expect(page.getByText('2 Passkey(s) eingerichtet')).toBeVisible();
@@ -165,6 +169,49 @@ test('passkey setup, login, replay rejection, and sensitive change', async ({ pa
     headers: { origin }, data: assertion, failOnStatusCode: false,
   });
   expect(replay.status()).toBe(401);
+
+
+  // Unauthenticated challenge floods cannot fill the authenticated confirmation pool.
+  let evicted;
+  for (let index = 1; index <= 17; index += 1) {
+    const started = await context.request.post(`${origin}/passkey/login/start`, { headers: { origin, 'x-forwarded-for': `192.0.2.${index}` }, data: {} });
+    expect(started.status()).toBe(200);
+    if (index === 1) {
+      const flow = await started.json();
+      const credential = await page.evaluate(async (challenge) => (await navigator.credentials.get({ publicKey: PublicKeyCredential.parseRequestOptionsFromJSON(challenge.publicKey || challenge) })).toJSON(), flow.challenge);
+      evicted = { flow: flow.flow, credential };
+    }
+  }
+  const oldest = await context.request.post(`${origin}/passkey/login/finish`, { headers: { origin }, data: evicted, failOnStatusCode: false });
+  expect(oldest.status()).toBe(401);
+  for (let index = 0; index < 11; index += 1) {
+    const limited = await context.request.post(`${origin}/passkey/login/start`, { headers: { origin, 'x-forwarded-for': '198.51.100.1' }, data: {}, failOnStatusCode: false });
+    expect(limited.status()).toBe(index < 10 ? 200 : 429);
+  }
+
+
+  await page.goto(`${origin}/account`);
+  await expect(page.getByText('Laptop', { exact: true })).toBeVisible();
+  const backup = page.locator('tr').filter({ hasText: 'USB-Ersatz' });
+  const backupId = await backup.locator('[data-passkey-remove]').getAttribute('data-passkey-remove');
+  const unconfirmedRemoval = await context.request.post(`${origin}/passkey/account/remove`, { headers: { origin }, data: { key_id: backupId }, failOnStatusCode: false });
+  expect(unconfirmedRemoval.status()).toBe(401);
+  await backup.getByRole('button', { name: 'Entfernen', exact: true }).click();
+  await expect(page.getByText('USB-Ersatz', { exact: true })).toHaveCount(0);
+  await expect(page.locator('[data-passkey-remove]')).toBeDisabled();
+  await client.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId: backupAuthenticator });
+  expect((await client.send('WebAuthn.getCredentials', { authenticatorId: primaryAuthenticator })).credentials.length).toBe(1);
+  const oldSession = await context.request.get(`${origin}/account`, { headers: { cookie: `__Host-nx-admin=${originalSession}` }, maxRedirects: 0, failOnStatusCode: false });
+  expect(oldSession.status()).toBe(303);
+  await page.evaluate(async () => {
+    const start = await (await fetch('/passkey/stepup/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+    const credential = await navigator.credentials.get({ publicKey: PublicKeyCredential.parseRequestOptionsFromJSON(start.challenge.publicKey || start.challenge) });
+    const done = await fetch('/passkey/stepup/finish', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ flow: start.flow, credential: credential.toJSON() }) });
+    if (!done.ok) throw new Error('Passkey confirmation failed');
+  });
+  const lastId = await page.locator('[data-passkey-remove]').getAttribute('data-passkey-remove');
+  const lastRemoval = await context.request.post(`${origin}/passkey/account/remove`, { headers: { origin }, data: { key_id: lastId }, failOnStatusCode: false });
+  expect(lastRemoval.status()).toBe(409);
 
   const missingStepup = await context.request.post(`${origin}/settings/scanner`, {
     headers: { origin }, form: { mode: 'none', username: '', new_password: '' },

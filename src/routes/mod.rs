@@ -265,7 +265,14 @@ async fn request_log(request: Request, next: Next) -> Response {
 }
 
 async fn browser_security_headers(req: Request, next: Next) -> Response {
+    let private = !req.uri().path().starts_with("/static/");
     let mut response = next.run(req).await;
+    if private {
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("private, no-store"),
+        );
+    }
     response.headers_mut().insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -273,7 +280,7 @@ async fn browser_security_headers(req: Request, next: Next) -> Response {
     response.headers_mut().insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
         ),
     );
     response.headers_mut().insert(
@@ -367,6 +374,7 @@ fn admin_routes() -> Router<AppState> {
         .route("/passkey/stepup/start", post(admin::passkey_stepup_start))
         .route("/passkey/stepup/finish", post(admin::passkey_stepup_finish))
         .route("/passkey/account/add/start", post(admin::passkey_add_start))
+        .route("/passkey/account/remove", post(admin::passkey_remove))
         .route(
             "/passkey/account/add/finish",
             post(admin::passkey_add_finish),
@@ -419,7 +427,10 @@ fn scanner_routes() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
         .route("/NmWebService/heartbeat", get(scanner::heartbeat))
-        .route("/NmWebService/device", post(scanner::device))
+        .route(
+            "/NmWebService/device",
+            post(scanner::device).layer(axum::extract::DefaultBodyLimit::max(16 * 1024)),
+        )
         .route(
             "/NmWebService/authorization",
             get(scanner::get_authorization),
@@ -502,6 +513,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admin_pages_disable_caching_and_restrict_form_destinations() {
+        let (server, _tmp) = test_server();
+        for path in ["/", "/scans", "/settings"] {
+            let response = server.get(path).await;
+            assert_eq!(
+                response
+                    .headers()
+                    .get("cache-control")
+                    .and_then(|v| v.to_str().ok()),
+                Some("private, no-store")
+            );
+            assert!(
+                response.headers()["content-security-policy"]
+                    .to_str()
+                    .unwrap()
+                    .contains("form-action 'self'")
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn protected_mutations_require_session_and_same_origin() {
         let root = tempfile::tempdir().unwrap();
         let auth = crate::admin_auth::AdminAuth::open(root.path(), &[0x42; 32]).unwrap();
@@ -522,6 +554,7 @@ mod tests {
             "/passkey/stepup/finish",
             "/passkey/account/add/start",
             "/passkey/account/add/finish",
+            "/passkey/account/remove",
             "/scans/0123456789abcdef0123456789abcdef/complete",
             "/scans/0123456789abcdef0123456789abcdef/discard",
             "/scans/0123456789abcdef0123456789abcdef/retry",

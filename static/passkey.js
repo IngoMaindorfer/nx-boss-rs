@@ -115,7 +115,7 @@
     button.disabled = true;
     try {
       await register('/passkey/setup/start', '/passkey/setup/finish', {
-        token: form.elements.token.value.trim(), username: form.elements.username.value,
+        name: form.elements.passkey_name?.value.trim() || '', token: form.elements.token.value.trim(), username: form.elements.username.value,
       });
       window.location.assign('/');
     } catch (error) { report(error); button.disabled = false; }
@@ -135,9 +135,20 @@
     button.disabled = true;
     try {
       await authenticate('/passkey/stepup/start', '/passkey/stepup/finish');
-      await register('/passkey/account/add/start', '/passkey/account/add/finish');
+      await register('/passkey/account/add/start', '/passkey/account/add/finish', { name: document.querySelector('[name=passkey_name]')?.value.trim() || '' });
       window.location.reload();
     } catch (error) { report(error); button.disabled = false; }
+  });
+
+  document.querySelectorAll('[data-passkey-remove]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      try {
+        await authenticate('/passkey/stepup/start', '/passkey/stepup/finish');
+        await post('/passkey/account/remove', { key_id: button.dataset.passkeyRemove });
+        window.location.reload();
+      } catch (error) { report(error); button.disabled = false; }
+    });
   });
 
   document.querySelectorAll('form[data-passkey-stepup]').forEach((form) => {

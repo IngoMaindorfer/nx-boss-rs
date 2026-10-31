@@ -44,3 +44,7 @@ main { box-sizing: border-box; }
 button.secret-toggle { flex: none; background: transparent; color: var(--auth-heading); border: 1px solid #8b94a4; padding: .5rem; }
 .secret-toggle[hidden] { display: none; }
 input::-ms-reveal { display: none; }
+
+.auth-key-list { width: 100%; margin: 1rem 0; border-collapse: collapse; text-align: left; }
+.auth-key-list td { overflow-wrap: anywhere; padding: .4rem; }
+button:disabled { opacity: .55; cursor: not-allowed; }

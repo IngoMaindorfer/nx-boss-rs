@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
+    net::IpAddr,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -13,6 +14,10 @@ use webauthn_rs::prelude::{
 };
 const IDLE_LIFETIME: Duration = Duration::from_secs(30 * 60);
 const SESSION_LIFETIME: Duration = Duration::from_secs(12 * 60 * 60);
+#[derive(Debug, thiserror::Error)]
+#[error("too many login challenge requests")]
+pub struct LoginRateLimited;
+
 #[derive(Clone)]
 pub struct AdminAuth {
     inner: Arc<Mutex<Inner>>,
@@ -26,6 +31,7 @@ struct Inner {
     passkey_registrations: HashMap<String, PendingPasskeyRegistration>,
     passkey_authentications: HashMap<String, PendingPasskeyAuthentication>,
     setup_token: Option<String>,
+    login_clients: HashMap<Option<IpAddr>, VecDeque<Instant>>,
     sessions: HashMap<String, Session>,
     #[cfg(test)]
     test_configured: bool,
@@ -35,12 +41,15 @@ struct PasskeyAccount {
     username: String,
     user_id: Uuid,
     keys: Vec<Passkey>,
+    #[serde(default)]
+    names: HashMap<String, String>,
 }
 enum RegistrationPurpose {
     Setup,
     Add { session: String },
 }
 struct PendingPasskeyRegistration {
+    name: String,
     created: Instant,
     username: String,
     user_id: Uuid,
@@ -61,6 +70,26 @@ struct Session {
     last_seen: Instant,
     stepup_until: Option<Instant>,
 }
+pub struct PasskeyView {
+    pub id: String,
+    pub name: String,
+}
+fn credential_id(key: &Passkey) -> String {
+    let bytes: &[u8] = key.cred_id().as_ref();
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+fn passkey_name(name: &str, number: usize) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Ok(format!("Passkey {number}"));
+    }
+    anyhow::ensure!(
+        name.chars().count() <= 64 && !name.chars().any(char::is_control),
+        "invalid passkey name"
+    );
+    Ok(name.into())
+}
+
 fn random_hex() -> Result<String> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).context("OS random source unavailable")?;
@@ -275,10 +304,56 @@ impl AdminAuth {
             .map_or(0, |account| account.keys.len())
     }
 
+    pub fn passkeys(&self) -> Vec<PasskeyView> {
+        let inner = crate::lock!(self.inner);
+        inner
+            .passkey_account
+            .as_ref()
+            .map(|a| {
+                a.keys
+                    .iter()
+                    .enumerate()
+                    .map(|(index, key)| {
+                        let id = credential_id(key);
+                        let name = a
+                            .names
+                            .get(&id)
+                            .cloned()
+                            .unwrap_or_else(|| format!("Passkey {}", index + 1));
+                        PasskeyView { id, name }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    pub fn remove_passkey(&self, session: &str, id: &str) -> Result<bool> {
+        if !self.consume_passkey_stepup(session) {
+            return Ok(false);
+        }
+        let mut inner = crate::lock!(self.inner);
+        let mut updated = inner
+            .passkey_account
+            .as_ref()
+            .context("passkeys not configured")?
+            .clone();
+        anyhow::ensure!(updated.keys.len() > 1, "the last passkey cannot be removed");
+        let before = updated.keys.len();
+        updated.keys.retain(|key| credential_id(key) != id);
+        anyhow::ensure!(updated.keys.len() + 1 == before, "unknown passkey");
+        updated.names.remove(id);
+        self.persist_passkeys(&updated)?;
+        inner.passkey_account = Some(updated);
+        inner.sessions.retain(|token, _| token == session);
+        inner.passkey_authentications.clear();
+        inner.passkey_registrations.clear();
+        Ok(true)
+    }
+
     pub fn start_passkey_setup(
         &self,
         token: &str,
         username: &str,
+        name: &str,
     ) -> Result<(String, serde_json::Value)> {
         if username.len() < 3 || username.len() > 64 || username.chars().any(char::is_control) {
             bail!("invalid admin username");
@@ -305,6 +380,7 @@ impl AdminAuth {
         inner.passkey_registrations.insert(
             flow.clone(),
             PendingPasskeyRegistration {
+                name: passkey_name(name, 1)?,
                 created: Instant::now(),
                 username: username.to_owned(),
                 user_id,
@@ -345,6 +421,7 @@ impl AdminAuth {
         let account = PasskeyAccount {
             username: pending.username,
             user_id: pending.user_id,
+            names: HashMap::from([(credential_id(&key), pending.name)]),
             keys: vec![key],
         };
         self.persist_passkeys(&account)?;
@@ -355,11 +432,46 @@ impl AdminAuth {
         issue_session(&mut inner)
     }
 
-    pub fn start_passkey_login(&self) -> Result<(String, serde_json::Value)> {
+    pub fn start_passkey_login(
+        &self,
+        client: Option<IpAddr>,
+    ) -> Result<(String, serde_json::Value)> {
         let mut inner = crate::lock!(self.inner);
         prune_passkey_flows(&mut inner);
-        if inner.passkey_authentications.len() >= 16 {
-            bail!("too many pending passkey logins");
+        inner.login_clients.retain(|_, attempts| {
+            attempts.retain(|seen| seen.elapsed() < Duration::from_secs(60));
+            !attempts.is_empty()
+        });
+        if !inner.login_clients.contains_key(&client)
+            && inner.login_clients.len() >= 128
+            && let Some(oldest) = inner
+                .login_clients
+                .iter()
+                .min_by_key(|(_, seen)| seen.front().copied())
+                .map(|(ip, _)| *ip)
+        {
+            inner.login_clients.remove(&oldest);
+        }
+        let attempts = inner.login_clients.entry(client).or_default();
+        if attempts.len() >= 10 {
+            return Err(LoginRateLimited.into());
+        }
+        attempts.push_back(Instant::now());
+        let logins = inner
+            .passkey_authentications
+            .values()
+            .filter(|p| matches!(&p.purpose, AuthenticationPurpose::Login))
+            .count();
+        if logins >= 16 {
+            let oldest = inner
+                .passkey_authentications
+                .iter()
+                .filter(|(_, p)| matches!(&p.purpose, AuthenticationPurpose::Login))
+                .min_by_key(|(_, p)| p.created)
+                .map(|(id, _)| id.clone());
+            if let Some(oldest) = oldest {
+                inner.passkey_authentications.remove(&oldest);
+            }
         }
         let account = inner
             .passkey_account
@@ -384,7 +496,14 @@ impl AdminAuth {
     pub fn start_passkey_stepup(&self, session: &str) -> Result<(String, serde_json::Value)> {
         let mut inner = crate::lock!(self.inner);
         prune_passkey_flows(&mut inner);
-        if !valid_session(&mut inner, session) || inner.passkey_authentications.len() >= 16 {
+        if !valid_session(&mut inner, session)
+            || inner
+                .passkey_authentications
+                .values()
+                .filter(|p| matches!(&p.purpose, AuthenticationPurpose::StepUp { .. }))
+                .count()
+                >= 16
+        {
             bail!("admin session unavailable");
         }
         let account = inner
@@ -477,7 +596,11 @@ impl AdminAuth {
             .is_some_and(|until| Instant::now() < until)
     }
 
-    pub fn start_passkey_add(&self, session: &str) -> Result<(String, serde_json::Value)> {
+    pub fn start_passkey_add(
+        &self,
+        session: &str,
+        name: &str,
+    ) -> Result<(String, serde_json::Value)> {
         if !self.consume_passkey_stepup(session) {
             bail!("passkey confirmation required");
         }
@@ -504,12 +627,14 @@ impl AdminAuth {
             &account.username,
             Some(exclude),
         )?;
+        let name = passkey_name(name, account.keys.len() + 1)?;
         let username = account.username.clone();
         let user_id = account.user_id;
         let flow = random_hex()?;
         inner.passkey_registrations.insert(
             flow.clone(),
             PendingPasskeyRegistration {
+                name,
                 created: Instant::now(),
                 username,
                 user_id,
@@ -558,6 +683,7 @@ impl AdminAuth {
         {
             bail!("duplicate or stale passkey registration");
         }
+        updated.names.insert(credential_id(&key), pending.name);
         updated.keys.push(key);
         self.persist_passkeys(&updated)?;
         inner.passkey_account = Some(updated);
@@ -614,9 +740,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let auth =
             AdminAuth::open_with_origin(dir.path(), &[0x42; 32], "https://localhost").unwrap();
-        assert!(auth.start_passkey_setup("wrong", "admin").is_err());
+        assert!(auth.start_passkey_setup("wrong", "admin", "test").is_err());
         let token = std::fs::read_to_string(dir.path().join("admin-setup-token")).unwrap();
-        let (flow, _challenge) = auth.start_passkey_setup(&token, "admin").unwrap();
+        let (flow, _challenge) = auth.start_passkey_setup(&token, "admin", "test").unwrap();
         assert!(
             auth.finish_passkey_setup(&flow, &token, serde_json::json!({}))
                 .is_err()

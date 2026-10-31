@@ -29,6 +29,7 @@ struct AccountTpl {
     username: String,
     lang: &'static str,
     passkey_count: usize,
+    passkeys: Vec<crate::admin_auth::PasskeyView>,
 }
 
 fn preferred_lang(headers: &HeaderMap) -> &'static str {
@@ -69,6 +70,8 @@ pub async fn login_get(headers: HeaderMap) -> Response {
 
 #[derive(Deserialize)]
 pub struct PasskeySetupStart {
+    #[serde(default)]
+    name: String,
     token: String,
     username: String,
 }
@@ -85,6 +88,9 @@ fn passkey_challenge(result: anyhow::Result<(String, Value)>) -> Response {
     match result {
         Ok((flow, challenge)) => {
             Json(json!({ "flow": flow, "challenge": challenge })).into_response()
+        }
+        Err(error) if error.is::<crate::admin_auth::LoginRateLimited>() => {
+            StatusCode::TOO_MANY_REQUESTS.into_response()
         }
         Err(_) => StatusCode::UNAUTHORIZED.into_response(),
     }
@@ -104,7 +110,7 @@ pub async fn passkey_setup_start(
     let Some(auth) = state.admin_auth else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    passkey_challenge(auth.start_passkey_setup(&form.token, &form.username))
+    passkey_challenge(auth.start_passkey_setup(&form.token, &form.username, &form.name))
 }
 
 pub async fn passkey_setup_finish(
@@ -138,7 +144,13 @@ pub async fn passkey_login_start(State(state): State<AppState>, headers: HeaderM
     let Some(auth) = state.admin_auth else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    passkey_challenge(auth.start_passkey_login())
+    // Only Caddy reaches this listener; Caddy supplies the actual peer in XFF.
+    let client = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .and_then(|v| v.trim().parse().ok());
+    passkey_challenge(auth.start_passkey_login(client))
 }
 
 pub async fn passkey_login_finish(
@@ -198,7 +210,11 @@ pub async fn passkey_stepup_finish(
     }
 }
 
-pub async fn passkey_add_start(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub async fn passkey_add_start(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(form): Json<PasskeyName>,
+) -> Response {
     if !secure_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -208,7 +224,7 @@ pub async fn passkey_add_start(State(state): State<AppState>, headers: HeaderMap
     let Some(session) = super::admin_cookie(&headers) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    passkey_challenge(auth.start_passkey_add(session))
+    passkey_challenge(auth.start_passkey_add(session, &form.name))
 }
 
 pub async fn passkey_add_finish(
@@ -268,5 +284,39 @@ pub async fn account_get(State(state): State<AppState>, headers: HeaderMap) -> R
         username: auth.username().unwrap_or_default(),
         lang: preferred_lang(&headers),
         passkey_count: auth.passkey_count(),
+        passkeys: auth.passkeys(),
     })
+}
+
+#[derive(Deserialize)]
+pub struct PasskeyName {
+    #[serde(default)]
+    name: String,
+}
+#[derive(Deserialize)]
+pub struct PasskeyRemove {
+    key_id: String,
+}
+pub async fn passkey_remove(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(form): Json<PasskeyRemove>,
+) -> Response {
+    if !secure_origin(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if form.key_id.len() > 4096 {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let Some(auth) = state.admin_auth else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let Some(session) = super::admin_cookie(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    match auth.remove_passkey(session, &form.key_id) {
+        Ok(true) => Json(json!({"ok":true})).into_response(),
+        Ok(false) => StatusCode::UNAUTHORIZED.into_response(),
+        Err(_) => StatusCode::CONFLICT.into_response(),
+    }
 }
