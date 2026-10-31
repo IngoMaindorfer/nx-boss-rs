@@ -1,4 +1,19 @@
-# B07: Scanner ohne Export-Unterbrechung sichern
+# B07: Referenzkonzept; durch Betreiberentscheidung ersetzt
+
+**Entscheidung vom 31.10.2026, zweite Nachprüfung:** Der Hardlink-/Socket-Ansatz
+unten wird nicht umgesetzt und braucht keine Freigabe mehr. PVE sichert einmal
+nachts um 02:00 Uhr Europe/Berlin (plus bis 15 Minuten Zufallsversatz). Vor dem
+weiterhin gemeinsamen App-Stopp werden 15 Minuten ohne nx-boss-Batch-/Image-
+Anfragen verlangt; nach maximal 60 Minuten scheitert der Lauf ohne Stopp sichtbar.
+PVE-Health erhält 36 Stunden Altersgrenze, Desktop/Laptop bleiben vierstündlich.
+Das mögliche App-Datenverlustfenster steigt damit auf etwa 24 Stunden, bei
+fehlgeschlagenen Läufen mehr. Backupcode und Umsetzung liegen in Homelab.
+Die unten vorgeschlagenen Änderungen und 4–7 Tage Aufwand sind historische
+Alternativen, kein aktueller Arbeitsauftrag. Der gemeinsame ruhende Export
+vermeidet den vorgeschlagenen unabhängig erfassten nx-/Paperless-Zeitversatz;
+bestehende Unsicherheiten bei verlorenen API-Antworten bleiben bestehen.
+
+## Historischer Konzeptentwurf
 
 Entwurf zur Betreiberfreigabe, 31.10.2026. **Kein Exportskript, Timer, produktiver
 Dienst oder Snapshot-Mechanismus wird mit diesem Konzept geändert.** Die
@@ -23,7 +38,7 @@ erfolgreicher Restic-Lauf allein darf das nicht überdecken.
 
 | Beobachtung | Beleg / Grenze |
 |---|---|
-| Exportplan 02/06/10/14/18/22 Uhr, bis 15 Minuten Zufallsverzögerung | Homelab `restic-files-pve.conf` und `restic-files.timer`; Timer wurde nur gelesen. |
+| Alter Kalenderplan 02/06/10/14/18/22, nicht tatsächliche Exportstarts | Über vier Stunden lange oneshot-Läufe verschoben fällige Starts ans Laufende (beobachtet 14:21:24). Währenddessen kann NextElapseUSecRealtime leer sein. Neuer PVE-Plan täglich 02:00 mit bis 15 Minuten Zufallsversatz; aktiven Dienst und tatsächlichen Timerzustand prüfen. |
 | Ein nx-boss-Stopp/Start beim heutigen 10-Uhr-Lauf: 10:01:04.005532 bis 10:07:56.275849 CET | Zwei Journald-Zeitstempel aus `restic-files.service`, reduziert auf die bekannte damalige nx-Container-ID. Abstand **412,270317 s, etwa 6 min 52 s**. Es sind Empfangszeiten der CLI-Meldungen, kein millisekundengenauer HTTP-Verfügbarkeitsmesser. |
 | Zweiter regulärer Lauf direkt beobachtet | Docker `FinishedAt` 14:21:25.782757 bis `StartedAt` 14:32:11.134172 CET: **645,351415 s, etwa 10 min 45 s** zwischen Prozessende und Neustart. Read-only Polling alle zehn Sekunden bestätigte Export aktiv sowie App gestoppt/gestartet. HTTP-Bereitschaft kann zusätzlich später liegen. Keine manuellen Export- oder Restart-Aufrufe. |
 | Ganze Backupjobs dauern erheblich länger | Journald enthält z.B. 30.10. 10:08:55.669311–13:50:51.004868 CET. Dieser Zeitraum enthält weitere Exporte/Transfer und ist **nicht** Scanner-Ausfallzeit. |
@@ -279,5 +294,4 @@ hier nicht empfohlen. Laufende Scan-/Auth-Daten beim Code-Rollback nicht zurück
 - Langfristige Paperless-Batch-Referenz für Restore-Abgleich separat konfigurieren?
 - Persistente Scanner-Sitzungen als eigenes späteres Feature behandeln?
 
-Die Backupunterbrechung ist mit diesem Konzept **noch nicht behoben**. Das vorhandene
-Exportskript und die geplanten Läufe bleiben in diesem Auftrag unverändert.
+Historischer Entwurf: Dieses Konzept implementiert selbst keinen Snapshotmechanismus. Maßgeblich sind die neue Betreiberentscheidung und deren Umsetzung im Homelab-Repo; der gemeinsame Nacht-Stopp bleibt bewusst erhalten.

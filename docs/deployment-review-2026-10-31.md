@@ -10,7 +10,7 @@ war vollständig grün.
 - Image: `sha256:e09b03f4ea79e6f9b718c457f910623e5c30002e13224aaa737781862f433c69`, stabil getaggt als `nx-boss-rs:local`.
 - Rollback: `nx-boss-rs:pre-review-20261031` (`sha256:52911e07716de54583420697c23b80b14ae921896345831a06d0c7ce324a300f`).
 - Geschützte Sicherung: `/opt/nx-boss-rs/backups/pre-review-20261031/20261031T114733Z/`, Verzeichnis 0700, `source.tar` und `private.tar` 0600; private Inhalte nicht angesehen.
-- Vorprüfung 12:47:33 CET: keine Scan-Anfragen in 15 Minuten, kein laufender Export, nächster planmäßiger Export 14:00 CET.
+- Vorprüfung 12:47:33 CET: keine Scan-Anfragen in 15 Minuten, kein laufender Export, 14:00 CET wurde damals aus dem Kalender abgeleitet, nicht als tatsächlicher Trigger bestätigt (N6).
 - Abnahme: beide Container healthy, laufendes Image stimmt, HTTP-Health und Admin-HTTPS 200, HSTS und CSP gesetzt, keine neuen ERROR-Events.
 - Footer `793db1c`: am unveränderten Binary desselben Images mit isolierter temporärer Konfiguration und virtuellem Test-Passkey bestätigt. Kein produktiver Admin-Zugriff oder Auth-Bypass.
 
@@ -27,8 +27,15 @@ unangetastet. Es gab keinen physischen Testscan in diesem Rollout.
 2. Vor dem Stopp aus redigierten Logs belegen, dass in den letzten 15 Minuten
    keine `/NmWebService/batch`- oder `/NmWebService/image`-Anfragen vorkamen.
    Exportprozesse mit `ps -eo args | grep '[r]estic-export'` prüfen, kein `pgrep -f`
-   über SSH. Der nächste Lauf laut PVE-Timer muss mindestens 15 Minuten entfernt
-   sein; Startfenster mit bis zu 15 Minuten Zufallsverzögerung berücksichtigen.
+   über SSH. Auf PVE zusätzlich `systemctl show restic-files.service -p ActiveState
+   -p SubState` und `systemctl show restic-files.timer -p NextElapseUSecRealtime
+   -p TimersCalendar -p LastTriggerUSec` auswerten. Ist der Backupdienst noch
+   aktiv/activating, wird vorsichtshalber bis zum bestätigten Ende gewartet.
+   Ein leerer nächster Termin bedeutet keine freie Lücke. Nur bei bestätigtem
+   Folgetermin mindestens 15 Minuten in der Zukunft ausrollen, keine Schätzung
+   aus 02/06/10/14/18/22 Uhr. Nach B07 gilt PVE täglich 02:00 Europe/Berlin plus
+   bis 15 Minuten Zufallsverzögerung und Nachholen verpasster Termine. Deadline
+   von Export-Wartezeit und ein etwaiger überlanger Lauf sind zusätzlich zu beachten.
 3. Image im Build-Verzeichnis mit korrektem GIT_SHA bauen:
 
    ```sh
@@ -81,7 +88,7 @@ abgenommen. Ausgerollt ist Main-Commit
 - Image: `sha256:a7af248804b191f970b65d76f94c68923807de93cdfdc6b510d59612370ce168`, dauerhaft `nx-boss-rs:local`.
 - Rollback: `nx-boss-rs:pre-trust-20261031`, Image `sha256:e09b03f4ea79e6f9b718c457f910623e5c30002e13224aaa737781862f433c69`.
 - Sicherung: `/opt/nx-boss-rs/backups/pre-trust-20261031/20261031T134826Z/`, Verzeichnis 0700, beide Tars 0600; private Inhalte ungelesen.
-- Guard 14:48:26 CET: null Scan-Anfragen in 15 Minuten, kein Exportprozess, nächster Planlauf 18:00 CET. Der vorherige reguläre Export wurde vollständig abgewartet.
+- Guard 14:48:26 CET: null Scan-Anfragen in 15 Minuten, kein Exportprozess, 18:00 CET war nur eine damalige Kalenderannahme (N6). Der laufende Upload war nicht beendet; der Exportprozess war bereits beendet. Beide Rollouts blieben davon unbeeinträchtigt.
 - Beide Container healthy, laufendes App-Image identisch, Health und Admin-HTTPS 200, HSTS/CSP gesetzt, seit Wechsel je null ERROR in App und Caddy.
 - Footer `163c2e5` am exakten Image isoliert mit temporären Daten/Test-Passkey bestätigt. Produktives `/login` bietet Gerätevertrauen standardmäßig ausgeschaltet und optionalen Gerätenamen. Echte Anmeldung/Widerruf bleibt Betreiberprüfung.
 - Nur nx-boss-rs und Caddy neu erstellt. Keine privaten Inhalte angesehen oder manuell geändert, kein manueller Export, keine Scanner-Rotation, keine Änderung in Homelab oder am Backup.

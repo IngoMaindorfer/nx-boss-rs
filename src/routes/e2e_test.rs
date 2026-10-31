@@ -2,7 +2,7 @@
 /// heartbeat → device → GET auth → POST auth → scansetting →
 /// POST batch → POST image (real JPEG) → PUT batch → PDF delivery → UI verification
 ///
-/// Mirrors the flow from scripts/rev.py, but runs in-process via axum_test.
+/// Exercises the scanner protocol in-process via axum_test.
 /// The fixture is a public-domain excerpt from the U.S. Declaration of Independence
 /// (Wikimedia Commons, CC0 / U.S. government work).
 #[cfg(test)]

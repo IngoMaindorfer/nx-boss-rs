@@ -94,7 +94,7 @@ The job UI does not expose `output_path`: it is an internal storage setting, not
 
 In the Scan Jobs table, drag a row by its handle or focus the handle and use the up/down arrow keys to change the order. A click on the rest of the row opens that job's editor. The order is saved immediately in the config file, appears on the dashboard, and is sent to the scanner on its next authorization request; job IDs do not change. A failed save restores the previous order, and an edit from another browser causes the page to reload before it can overwrite that order.
 
-For protocol experiments, `scripts/test_scan.sh` exercises the local scanner listener. `scripts/rev.py` dumps full requests and responses, so do not use it with real credentials. Share captures only after removing credentials, access tokens, document contents, device serials, and network identifiers.
+For isolated protocol checks, `scripts/test_scan.sh` exercises the local scanner listener with disposable test data. Do not run test imports against production without authorization. See [the scanner authentication research](docs/scanner-auth-tls-research.md) for measured protocol behavior.
 
 ## Operations
 

@@ -218,7 +218,8 @@ async fn admin_session_gate(
     } else if matches!(
         path.as_str(),
         "/login" | "/passkey/login/start" | "/passkey/login/finish"
-    ) {
+    ) || (path == "/logout" && req.method() == axum::http::Method::POST)
+    {
         if path == "/login" && restored.is_some() {
             Redirect::to("/").into_response()
         } else {
@@ -659,7 +660,6 @@ mod tests {
             "/jobs/reorder",
             "/jobs/0",
             "/jobs/0/expert",
-            "/logout",
             "/passkey/stepup/start",
             "/passkey/stepup/finish",
             "/passkey/account/add/start",
@@ -989,6 +989,71 @@ mod trusted_route_tests {
     use super::*;
     use crate::{admin_auth::AdminAuth, config::Config};
     use axum_test::TestServer;
+    #[tokio::test]
+    async fn expired_session_logout_revokes_trust_and_keeps_origin_protection() {
+        for expired in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let auth = AdminAuth::open(root.path(), &[0x42; 32]).unwrap();
+            let session = auth.test_session();
+            let trust = auth.trust_device(&session, "Laptop").unwrap();
+            auth.test_expire_session(&session);
+            let cookie = if expired {
+                format!("__Host-nx-admin={session}; __Host-nx-trust={trust}")
+            } else {
+                format!("__Host-nx-trust={trust}")
+            };
+            let server = TestServer::new(admin_router(
+                AppState::new(Config::default()).with_admin_auth(auth.clone()),
+            ));
+            for origin in [None, Some("https://attacker.invalid")] {
+                let mut request = server
+                    .post("/logout")
+                    .add_header("cookie", &cookie)
+                    .add_header("x-forwarded-proto", "https");
+                if let Some(origin) = origin {
+                    request = request.add_header("origin", origin);
+                }
+                assert_eq!(request.await.status_code(), 403);
+                assert!(auth.trusted_cookie_valid(&trust));
+            }
+            let response = server
+                .post("/logout")
+                .add_header("cookie", &cookie)
+                .add_header("origin", "https://localhost")
+                .add_header("x-forwarded-proto", "https")
+                .await;
+            assert_eq!(response.status_code(), 303);
+            assert_eq!(response.headers()["location"], "/login");
+            for name in ["__Host-nx-admin=;", "__Host-nx-trust=;"] {
+                assert!(
+                    response
+                        .headers()
+                        .get_all(header::SET_COOKIE)
+                        .iter()
+                        .any(|v| v
+                            .to_str()
+                            .is_ok_and(|v| v.starts_with(name) && v.contains("Max-Age=0")))
+                );
+            }
+            assert!(!auth.trusted_cookie_valid(&trust));
+            assert!(!auth.session_valid(&session));
+            assert_eq!(
+                server
+                    .get("/account")
+                    .add_header("cookie", &cookie)
+                    .await
+                    .status_code(),
+                303
+            );
+            let anonymous = server
+                .post("/logout")
+                .add_header("origin", "https://localhost")
+                .add_header("x-forwarded-proto", "https")
+                .await;
+            assert_eq!(anonymous.status_code(), 303);
+        }
+    }
+
     #[tokio::test]
     async fn trust_restores_get_only_and_never_supplies_confirmation() {
         let root = tempfile::tempdir().unwrap();
