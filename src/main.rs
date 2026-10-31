@@ -265,6 +265,7 @@ async fn run(event_log: event_log::EventLog) -> Result<()> {
         state.jobs.clone(),
         state.paperless_client.clone(),
         shutdown_rx.clone(),
+        state.delivery_lock.clone(),
     )));
     let scanner_app = routes::scanner_router(state.clone());
     let mut allowed_admin_hosts = vec![

@@ -33,6 +33,8 @@ struct ScansDetailTpl {
     created_at: String,
     files: Vec<String>,
     completed: bool,
+    corrupt: bool,
+    delivery_pending: bool,
     scanner_model: Option<String>,
     scanner_serial: Option<String>,
     resolution: u32,
@@ -73,17 +75,11 @@ pub async fn scans_list(UiState(state): UiState) -> Response {
 }
 
 pub async fn scans_detail(Path(batch_id): Path<String>, UiState(state): UiState) -> Response {
-    let jobs = lock!(state.jobs);
+    let jobs = lock!(state.jobs).clone();
     let Some(dir) = find_batch_dir(&jobs, &batch_id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let meta_path = dir.join("metadata.json");
-    let Ok(content) = std::fs::read_to_string(&meta_path) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let Ok(meta) = serde_json::from_str::<BatchMetadata>(&content) else {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    };
+    let (meta, corrupt) = super::ui::scan_metadata(&dir);
     let files: Vec<String> = meta.files.iter().map(|f| f.filename.clone()).collect();
     let paperless_status = paperless_status(&meta, state.translations);
     let paperless_error = meta.paperless.as_ref().and_then(|p| p.last_error.clone());
@@ -106,6 +102,11 @@ pub async fn scans_detail(Path(batch_id): Path<String>, UiState(state): UiState)
         created_at: meta.created_at,
         files,
         completed: meta.completed,
+        corrupt,
+        delivery_pending: meta
+            .paperless
+            .as_ref()
+            .is_some_and(|r| r.document_id.is_none()),
         scanner_model: meta.scanner.model,
         scanner_serial: meta.scanner.serial,
         resolution,
@@ -259,7 +260,7 @@ mod tests {
             )
             .as_bytes(),
         );
-        body.extend_from_slice(b"\xff\xd8\xff\xe0fake");
+        body.extend_from_slice(include_bytes!("../../tests/fixtures/scan_page.jpg"));
         body.extend_from_slice(b"\r\n");
         body.extend_from_slice(sep.as_bytes());
         body.extend_from_slice(b"Content-Disposition: form-data; name=\"parameter\"\r\n\r\n");
@@ -440,5 +441,403 @@ mod tests {
         let list = server.get("/scans").await.text();
         assert!(list.contains("/scans/00000000000000000000000000000000"));
         assert!(list.contains("Paperless-Importe brauchen Prüfung: 1"));
+    }
+}
+
+#[cfg(test)]
+mod recovery_action_tests {
+    use super::*;
+    use crate::{
+        admin_auth::AdminAuth,
+        batch::{Batch, ScannerInfo},
+        config::{Config, Job},
+        state::AppState,
+    };
+    use axum_test::TestServer;
+    use serde_json::json;
+    #[tokio::test]
+    async fn admin_can_complete_and_discard_after_memory_sweep_with_stepup() {
+        let root = tempfile::tempdir().unwrap();
+        let auth_dir = tempfile::tempdir().unwrap();
+        let job = Job {
+            output_path: root.path().to_owned(),
+            consume_path: None,
+            job_info: json!({"name":"test","job_id":0}),
+            scan_settings: json!({}),
+        };
+        let first = Batch::create(&job, ScannerInfo::default()).unwrap();
+        let second = Batch::create(&job, ScannerInfo::default()).unwrap();
+        let auth = AdminAuth::open(auth_dir.path(), &[0x42; 32]).unwrap();
+        let session = auth.test_session();
+        let state = AppState::new(Config {
+            jobs: vec![job],
+            ..Config::default()
+        })
+        .with_admin_auth(auth.clone());
+        crate::lock!(state.batches).clear();
+        let server = TestServer::new(crate::routes::admin_router(state));
+        let cookie = format!("__Host-nx-admin={session}");
+        let url = format!("/scans/{}/complete", first.id);
+        let denied = server
+            .post(&url)
+            .form(&[("unused", "")])
+            .add_header("cookie", &cookie)
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
+            .await;
+        assert_eq!(denied.status_code(), 401);
+        auth.test_confirm_stepup(&session);
+        let done = server
+            .post(&url)
+            .form(&[("unused", "")])
+            .add_header("cookie", &cookie)
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
+            .await;
+        assert_eq!(done.status_code(), 303);
+        let meta: BatchMetadata = serde_json::from_slice(
+            &std::fs::read(root.path().join(&first.id).join("metadata.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(meta.completed);
+        auth.test_confirm_stepup(&session);
+        let discarded = server
+            .post(&format!("/scans/{}/discard", second.id))
+            .form(&[("unused", "")])
+            .add_header("cookie", &cookie)
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
+            .await;
+        assert_eq!(discarded.status_code(), 303);
+        assert!(!root.path().join(&second.id).exists());
+    }
+}
+
+#[derive(serde::Deserialize, Default)]
+pub struct RecoveryForm {
+    #[serde(default)]
+    confirm_duplicate: String,
+    #[serde(default)]
+    document_id: String,
+}
+
+pub async fn recover(
+    Path((id, action)): Path<(String, String)>,
+    UiState(state): UiState,
+    headers: axum::http::HeaderMap,
+    axum::Form(form): axum::Form<RecoveryForm>,
+) -> Response {
+    if !crate::batch::valid_batch_id(&id)
+        || !matches!(action.as_str(), "complete" | "discard" | "retry" | "assign")
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(auth) = state.admin_auth.as_ref() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    if !super::admin::secure_origin(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if !super::admin_cookie(&headers).is_some_and(|session| auth.consume_passkey_stepup(session)) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if action == "retry" && form.confirm_duplicate != "yes" {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let document = if action == "assign" {
+        match form.document_id.parse::<u64>() {
+            Ok(id) if id > 0 => Some(id),
+            _ => return StatusCode::BAD_REQUEST.into_response(),
+        }
+    } else {
+        None
+    };
+    let lock = state.delivery_lock.clone();
+    let _delivery = lock.lock().await;
+    let task = state.clone();
+    let batch_id = id.clone();
+    let discard = action == "discard";
+    let Ok(_pdf_slot) = state.pdf_slots.clone().try_acquire_owned() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let _change = crate::lock!(task.config_change_lock);
+        let jobs = crate::lock!(task.jobs).clone();
+        let dir =
+            find_batch_dir(&jobs, &batch_id).ok_or_else(|| anyhow::anyhow!("scan not found"))?;
+        let existing = crate::lock!(task.batches).get(&batch_id).cloned();
+        if discard {
+            let _active = existing.as_ref().map(|batch| crate::lock!(batch));
+            let parent = dir.parent().expect("batch has parent");
+            let tomb = parent.join(format!(".discarded-{batch_id}"));
+            std::fs::rename(&dir, &tomb)?;
+            crate::atomic_file::sync_dir(parent)?;
+            std::fs::remove_dir_all(tomb)?;
+            crate::atomic_file::sync_dir(parent)?;
+            crate::lock!(task.batches).remove(&batch_id);
+            return Ok(());
+        }
+        let batch = if let Some(existing) = existing {
+            existing
+        } else {
+            let mut found = None;
+            for job in &jobs {
+                if let Some(batch) = crate::batch::Batch::open(job, &batch_id)? {
+                    found = Some(batch);
+                    break;
+                }
+            }
+            let recovered = std::sync::Arc::new(std::sync::Mutex::new(
+                found.ok_or_else(|| anyhow::anyhow!("scan not found"))?,
+            ));
+            crate::lock!(task.batches)
+                .entry(batch_id.clone())
+                .or_insert(recovered)
+                .clone()
+        };
+        {
+            let mut saved = crate::lock!(batch);
+            match action.as_str() {
+                "complete" => saved.complete()?,
+                "retry" => saved.retry_paperless()?,
+                "assign" => {
+                    anyhow::ensure!(
+                        saved.metadata().completed
+                            && saved
+                                .metadata()
+                                .paperless
+                                .as_ref()
+                                .is_some_and(|r| r.document_id.is_none()),
+                        "no pending delivery"
+                    );
+                    saved.record_paperless_document(document.expect("validated document"))?;
+                }
+                _ => unreachable!(),
+            }
+        }
+        crate::lock!(task.batches).remove(&batch_id);
+        Ok(())
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => axum::response::Redirect::to(&if discard {
+            "/scans".into()
+        } else {
+            format!("/scans/{id}")
+        })
+        .into_response(),
+        _ => {
+            let message = if state.translations.code == "de" {
+                "Aktion fehlgeschlagen. Beschädigte Scandaten bitte prüfen oder verwerfen; für erneutes Senden die Duplikatwarnung bestätigen."
+            } else {
+                "Operation failed. Inspect or discard corrupt scan data; confirm the duplicate warning before retrying delivery."
+            };
+            (
+                StatusCode::CONFLICT,
+                axum::response::Html(format!(
+                    "<p role=alert>{message}</p><a href=\"/scans/{id}\">Scan</a>"
+                )),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[cfg(test)]
+mod delivery_recovery_tests {
+    use crate::{
+        admin_auth::AdminAuth,
+        batch::{Batch, BatchMetadata, ScannerInfo},
+        config::{Config, Job},
+        state::AppState,
+    };
+    use axum_test::{TestResponse, TestServer};
+    use serde_json::json;
+    async fn act(
+        server: &TestServer,
+        auth: &AdminAuth,
+        session: &str,
+        id: &str,
+        operation: &str,
+        fields: &[(&str, &str)],
+        confirm: bool,
+    ) -> TestResponse {
+        if confirm {
+            auth.test_confirm_stepup(session);
+        }
+        server
+            .post(&format!("/scans/{id}/{operation}"))
+            .form(&fields)
+            .add_header("cookie", format!("__Host-nx-admin={session}"))
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
+            .await
+    }
+    #[tokio::test]
+    async fn retry_requires_warning_and_fresh_confirmation_then_manual_assignment_releases_delivery()
+     {
+        let root = tempfile::tempdir().unwrap();
+        let auth_dir = tempfile::tempdir().unwrap();
+        let job = Job {
+            output_path: root.path().into(),
+            consume_path: None,
+            job_info: json!({"name":"test","job_id":0}),
+            scan_settings: json!({}),
+        };
+        let mut batch = Batch::create(&job, ScannerInfo::default()).unwrap();
+        batch.enable_paperless().unwrap();
+        batch
+            .add_file(
+                "page.jpg",
+                include_bytes!("../../tests/fixtures/scan_page.jpg"),
+                json!({}),
+            )
+            .unwrap();
+        batch.complete().unwrap();
+        batch.record_paperless_attempt().unwrap();
+        batch.record_paperless_task("failed-task".into()).unwrap();
+        batch.record_paperless_error("failed").unwrap();
+        let auth = AdminAuth::open(auth_dir.path(), &[0x42; 32]).unwrap();
+        let session = auth.test_session();
+        let state = AppState::new(Config {
+            jobs: vec![job.clone()],
+            ..Config::default()
+        })
+        .with_admin_auth(auth.clone());
+        let server = TestServer::new(crate::routes::admin_router(state));
+        assert_eq!(
+            act(
+                &server,
+                &auth,
+                &session,
+                &batch.id,
+                "retry",
+                &[("confirm_duplicate", "yes")],
+                false
+            )
+            .await
+            .status_code(),
+            401
+        );
+        assert_eq!(
+            act(
+                &server,
+                &auth,
+                &session,
+                &batch.id,
+                "retry",
+                &[("confirm_duplicate", "no")],
+                true
+            )
+            .await
+            .status_code(),
+            400
+        );
+        assert_eq!(
+            act(
+                &server,
+                &auth,
+                &session,
+                &batch.id,
+                "retry",
+                &[("confirm_duplicate", "yes")],
+                true
+            )
+            .await
+            .status_code(),
+            303
+        );
+        let path = root.path().join(&batch.id).join("metadata.json");
+        let meta: BatchMetadata = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let receipt = meta.paperless.unwrap();
+        assert!(receipt.task_id.is_none());
+        assert_eq!(receipt.upload_attempts, 0);
+        assert!(receipt.last_error.is_none());
+        assert_eq!(
+            act(
+                &server,
+                &auth,
+                &session,
+                &batch.id,
+                "assign",
+                &[("document_id", "42")],
+                false
+            )
+            .await
+            .status_code(),
+            401
+        );
+        assert_eq!(
+            act(
+                &server,
+                &auth,
+                &session,
+                &batch.id,
+                "assign",
+                &[("document_id", "0")],
+                true
+            )
+            .await
+            .status_code(),
+            400
+        );
+        assert_eq!(
+            act(
+                &server,
+                &auth,
+                &session,
+                &batch.id,
+                "assign",
+                &[("document_id", "42")],
+                true
+            )
+            .await
+            .status_code(),
+            303
+        );
+        assert!(!crate::paperless::pending_delivery_exists(&[job]).unwrap());
+    }
+    #[tokio::test]
+    async fn corrupt_batch_is_visible_and_blocks_target_change_until_explicit_discard() {
+        let root = tempfile::tempdir().unwrap();
+        let auth_dir = tempfile::tempdir().unwrap();
+        let id = "0123456789abcdef0123456789abcdef";
+        std::fs::create_dir(root.path().join(id)).unwrap();
+        let job = Job {
+            output_path: root.path().into(),
+            consume_path: None,
+            job_info: json!({"name":"test","job_id":0}),
+            scan_settings: json!({}),
+        };
+        let error =
+            crate::paperless::pending_delivery_exists(std::slice::from_ref(&job)).unwrap_err();
+        assert!(error.to_string().contains("corrupt"));
+        let auth = AdminAuth::open(auth_dir.path(), &[0x42; 32]).unwrap();
+        let session = auth.test_session();
+        let state = AppState::new(Config {
+            jobs: vec![job.clone()],
+            ..Config::default()
+        })
+        .with_admin_auth(auth.clone());
+        let server = TestServer::new(crate::routes::admin_router(state));
+        let page = server
+            .get(&format!("/scans/{id}"))
+            .add_header("cookie", format!("__Host-nx-admin={session}"))
+            .await;
+        assert_eq!(page.status_code(), 200);
+        assert!(page.text().contains("Beschädigte Scandaten"));
+        assert_eq!(
+            act(&server, &auth, &session, id, "discard", &[], false)
+                .await
+                .status_code(),
+            401
+        );
+        assert_eq!(
+            act(&server, &auth, &session, id, "discard", &[], true)
+                .await
+                .status_code(),
+            303
+        );
+        assert!(!crate::paperless::pending_delivery_exists(&[job]).unwrap());
     }
 }

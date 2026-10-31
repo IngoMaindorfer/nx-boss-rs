@@ -138,7 +138,7 @@ pub async fn post_image(
         }
     };
 
-    if !parsed.content.starts_with(&[0xFF, 0xD8, 0xFF]) {
+    if !crate::pdf::valid_jpeg(&parsed.content) {
         warn!(event = "image.invalid_format", "post_image: not a JPEG");
         return bad_request("not a JPEG image");
     }
@@ -277,7 +277,12 @@ mod tests {
         let batch_id = create_batch(&server).await;
         let boundary = "formboundary123";
         let param = json!({"batch_id": batch_id}).to_string();
-        let body = multipart_body(boundary, b"\xff\xd8\xff\xd9", "p.jpg", &param);
+        let body = multipart_body(
+            boundary,
+            include_bytes!("../../tests/fixtures/scan_page.jpg"),
+            "p.jpg",
+            &param,
+        );
 
         let resp = server
             .post("/NmWebService/image")
@@ -293,7 +298,12 @@ mod tests {
         let batch_id = create_batch(&server).await;
         let boundary = "truncatedboundary";
         let param = json!({"batch_id": batch_id}).to_string();
-        let mut body = multipart_body(boundary, b"\xff\xd8\xff\xd9", "p.jpg", &param);
+        let mut body = multipart_body(
+            boundary,
+            include_bytes!("../../tests/fixtures/scan_page.jpg"),
+            "p.jpg",
+            &param,
+        );
         body.truncate(body.len() - (boundary.len() + 6));
         body.extend_from_slice(format!("--{boundary}\r\nmalformed header\r\n\r\n").as_bytes());
         let resp = server
@@ -316,7 +326,12 @@ mod tests {
         let batch_id = create_batch(&server).await;
         let boundary = "mixedboundary456";
         let param = json!({"batch_id": batch_id}).to_string();
-        let body = multipart_body(boundary, b"\xff\xd8\xff\xd9", "p.jpg", &param);
+        let body = multipart_body(
+            boundary,
+            include_bytes!("../../tests/fixtures/scan_page.jpg"),
+            "p.jpg",
+            &param,
+        );
 
         let resp = server
             .post("/NmWebService/image")
@@ -333,7 +348,12 @@ mod tests {
         let batch_id = create_batch(&server).await;
         let boundary = "CaseSensitiveBOUNDARY";
         let param = json!({"batch_id": batch_id}).to_string();
-        let body = multipart_body(boundary, b"\xff\xd8\xff\xd9", "p.jpg", &param);
+        let body = multipart_body(
+            boundary,
+            include_bytes!("../../tests/fixtures/scan_page.jpg"),
+            "p.jpg",
+            &param,
+        );
         let resp = server
             .post("/NmWebService/image")
             .content_type(&format!("multipart/mixed; boundary={boundary}"))
@@ -353,7 +373,8 @@ mod tests {
         let param = json!({"batch_id": batch_id}).to_string();
         // 3 MB of fake JPEG data — well above axum's 2 MB default limit
         let mut image = vec![0u8; 3 * 1024 * 1024];
-        image[..3].copy_from_slice(&[0xFF, 0xD8, 0xFF]);
+        let fixture = include_bytes!("../../tests/fixtures/scan_page.jpg");
+        image[..fixture.len()].copy_from_slice(fixture);
         let body = multipart_body(boundary, &image, "big.jpg", &param);
 
         let resp = server
@@ -372,7 +393,12 @@ mod tests {
         let batch_id = create_batch(&server).await;
         let boundary = "traversalboundary";
         let param = json!({"batch_id": batch_id}).to_string();
-        let body = multipart_body(boundary, b"\xff\xd8\xff\xd9", "../escape.jpg", &param);
+        let body = multipart_body(
+            boundary,
+            include_bytes!("../../tests/fixtures/scan_page.jpg"),
+            "../escape.jpg",
+            &param,
+        );
 
         let resp = server
             .post("/NmWebService/image")
@@ -425,7 +451,7 @@ mod tests {
             .bytes(
                 multipart_body(
                     "busy",
-                    b"\xff\xd8\xff\xd9",
+                    include_bytes!("../../tests/fixtures/scan_page.jpg"),
                     "page.jpg",
                     "{\"batch_id\":\"none\"}",
                 )
@@ -444,7 +470,12 @@ mod tests {
         let batch_id = create_batch(&server).await;
         let boundary = "upperboundary789";
         let param = json!({"batch_id": batch_id}).to_string();
-        let body = multipart_body(boundary, b"\xff\xd8\xff\xd9", "p.jpg", &param);
+        let body = multipart_body(
+            boundary,
+            include_bytes!("../../tests/fixtures/scan_page.jpg"),
+            "p.jpg",
+            &param,
+        );
 
         let resp = server
             .post("/NmWebService/image")

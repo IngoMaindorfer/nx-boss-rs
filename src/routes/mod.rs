@@ -421,6 +421,7 @@ fn admin_routes() -> Router<AppState> {
         .route("/jobs/{id}", delete(jobs_delete))
         .route("/scans", get(scans_list))
         .route("/scans/{id}", get(scans_detail))
+        .route("/scans/{id}/{action}", post(scans::recover))
         .route("/scans/{id}/files/{filename}", get(scans_file))
         .route("/settings", get(settings_get))
         .route("/settings", post(settings_post))

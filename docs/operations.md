@@ -43,3 +43,11 @@ The security-audit exception and its limited public-key-only RSA path are docume
 in `.cargo/audit.toml`. The remaining unmaintained dependencies are `basic-toml`
 (build-time Askama parser) and `unsafe-libyaml` (runtime YAML parser via serde_yaml);
 they are warnings, not silently ignored advisories. The yanked yoke-derive was updated.
+
+The scan detail page now offers passkey-confirmed completion/discard and Paperless
+retry/manual assignment. See [recovery actions](paperless-recovery-local.md#recovery-actions-added-by-the-31-october-review).
+Use `NX_BOSS_TIMEZONE=Europe/Berlin` (default) to form the Paperless scan date/title;
+this does not change UTC timestamps in scan metadata. The shutdown integration
+check now explicitly covers `userpass`, rejects the old session after restart,
+and logs in again before completing the recovered batch. Actual fi-7300NX behavior
+after a 401 still requires the operator's physical test.

@@ -42,6 +42,7 @@ pub struct ScanEntry {
     pub created_at: String,
     pub page_count: usize,
     pub completed: bool,
+    pub corrupt: bool,
     pub resolution: u32,
     pub pixel_format: String,
     pub source: String,
@@ -67,7 +68,7 @@ impl ScanStats {
             if scan.completed {
                 stats.documents += 1;
                 stats.pages += scan.page_count;
-            } else {
+            } else if !scan.corrupt {
                 stats.open_batches += 1;
             }
             stats.paperless_imported += usize::from(scan.paperless_imported);
@@ -91,6 +92,9 @@ pub struct JobRow {
 // ---------------------------------------------------------------------------
 
 pub fn paperless_status(meta: &BatchMetadata, t: &Translations) -> Option<String> {
+    if !meta.completed && paperless_needs_attention(meta) {
+        return Some(t.paperless_attention.into());
+    }
     let receipt = meta.paperless.as_ref()?;
     Some(if let Some(id) = receipt.document_id {
         format!("{} (#{id})", t.paperless_imported)
@@ -122,11 +126,41 @@ fn paperless_is_overdue(meta: &BatchMetadata, now: DateTime<Utc>) -> bool {
 }
 
 pub(super) fn paperless_needs_attention(meta: &BatchMetadata) -> bool {
+    if !meta.completed {
+        return DateTime::parse_from_rfc3339(&meta.created_at)
+            .map(|then| Utc::now().signed_duration_since(then).num_hours() >= 1)
+            .unwrap_or(true);
+    }
     meta.paperless.as_ref().is_some_and(|receipt| {
         receipt.document_id.is_none()
-            && meta.completed
             && (receipt.last_error.is_some() || paperless_is_overdue(meta, Utc::now()))
     })
+}
+
+pub(super) fn scan_metadata(path: &std::path::Path) -> (BatchMetadata, bool) {
+    match crate::batch::Batch::inspect_directory(path) {
+        Ok(meta) => (meta, false),
+        Err(_) => {
+            let created_at = std::fs::metadata(path)
+                .and_then(|m| m.modified())
+                .map(DateTime::<Utc>::from)
+                .unwrap_or_else(|_| Utc::now())
+                .to_rfc3339();
+            (
+                BatchMetadata {
+                    job_name: "—".into(),
+                    job_id: None,
+                    created_at,
+                    completed: false,
+                    files: vec![],
+                    scanner: Default::default(),
+                    job_config: Default::default(),
+                    paperless: None,
+                },
+                true,
+            )
+        }
+    }
 }
 
 pub fn list_scans(jobs: &[Job], limit: usize, t: &Translations) -> Vec<ScanEntry> {
@@ -136,51 +170,40 @@ pub fn list_scans(jobs: &[Job], limit: usize, t: &Translations) -> Vec<ScanEntry
         if !seen_paths.insert(&job.output_path) {
             continue;
         }
-        if let Ok(entries) = std::fs::read_dir(&job.output_path) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if !entry.file_type().is_ok_and(|kind| kind.is_dir())
-                    || !path
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .is_some_and(valid_batch_id)
-                {
-                    continue;
-                }
-                let meta_path = path.join("metadata.json");
-                if !meta_path
-                    .symlink_metadata()
-                    .is_ok_and(|metadata| metadata.file_type().is_file())
-                {
-                    continue;
-                }
-                if let Ok(content) = std::fs::read_to_string(&meta_path)
-                    && let Ok(meta) = serde_json::from_str::<BatchMetadata>(&content)
-                {
-                    let batch_id = path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
-                    scans.push(ScanEntry {
-                        paperless_status: paperless_status(&meta, t),
-                        paperless_attention: paperless_needs_attention(&meta),
-                        paperless_imported: meta
-                            .paperless
-                            .as_ref()
-                            .is_some_and(|receipt| receipt.document_id.is_some()),
-                        batch_id,
-                        job_name: meta.job_name,
-                        created_at: meta.created_at,
-                        page_count: meta.files.len(),
-                        completed: meta.completed,
-                        resolution: meta.job_config.resolution,
-                        pixel_format: meta.job_config.pixel_format,
-                        source: meta.job_config.source,
-                        scanner_model: meta.scanner.model,
-                    });
-                }
+        let Ok(entries) = std::fs::read_dir(&job.output_path) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
             }
+            let path = entry.path();
+            let Some(id) = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .filter(|id| valid_batch_id(id))
+            else {
+                continue;
+            };
+            let (meta, corrupt) = scan_metadata(&path);
+            scans.push(ScanEntry {
+                batch_id: id.into(),
+                job_name: meta.job_name.clone(),
+                created_at: meta.created_at.clone(),
+                page_count: meta.files.len(),
+                completed: meta.completed,
+                corrupt,
+                resolution: meta.job_config.resolution,
+                pixel_format: meta.job_config.pixel_format.clone(),
+                source: meta.job_config.source.clone(),
+                scanner_model: meta.scanner.model.clone(),
+                paperless_status: paperless_status(&meta, t),
+                paperless_attention: corrupt || paperless_needs_attention(&meta),
+                paperless_imported: meta
+                    .paperless
+                    .as_ref()
+                    .is_some_and(|r| r.document_id.is_some()),
+            });
         }
     }
     scans.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -426,6 +449,7 @@ mod tests {
             created_at: "2026-09-30T00:00:00Z".into(),
             page_count: pages,
             completed,
+            corrupt: false,
             resolution: 300,
             pixel_format: "rgb24".into(),
             source: "feeder".into(),
@@ -472,7 +496,7 @@ mod tests {
     }
 
     #[test]
-    fn recent_and_incomplete_batches_do_not_raise_overdue_alert() {
+    fn recent_batches_are_quiet_and_stale_open_batches_need_attention() {
         let mut meta = crate::batch::BatchMetadata {
             job_name: "Scan".into(),
             job_id: Some(0),
@@ -486,7 +510,7 @@ mod tests {
         assert!(!super::paperless_needs_attention(&meta));
         meta.created_at = "2026-01-01T00:00:00Z".into();
         meta.completed = false;
-        assert!(!super::paperless_needs_attention(&meta));
+        assert!(super::paperless_needs_attention(&meta));
         meta.completed = true;
         meta.paperless.as_mut().unwrap().last_attempt_at = Some(chrono::Utc::now().to_rfc3339());
         assert!(!super::paperless_needs_attention(&meta));
@@ -721,5 +745,37 @@ mod tests {
             body.contains("Einseitig (R\u{fc}ckseite)"),
             "feederRear must show Einseitig (Rückseite)"
         );
+    }
+}
+
+#[cfg(test)]
+mod recovery_inventory_tests {
+    use super::*;
+    use crate::{
+        batch::{Batch, ScannerInfo},
+        config::{Config, Job},
+    };
+    use serde_json::json;
+    #[test]
+    fn stale_open_and_corrupt_batches_require_attention() {
+        let root = tempfile::tempdir().unwrap();
+        let job = Job {
+            output_path: root.path().to_owned(),
+            consume_path: None,
+            job_info: json!({"name":"test","job_id":0}),
+            scan_settings: json!({}),
+        };
+        let batch = Batch::create(&job, ScannerInfo::default()).unwrap();
+        let path = root.path().join(&batch.id).join("metadata.json");
+        let mut meta: BatchMetadata =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        meta.created_at = "2026-01-01T00:00:00Z".into();
+        std::fs::write(&path, serde_json::to_vec(&meta).unwrap()).unwrap();
+        assert!(paperless_needs_attention(&meta));
+        std::fs::remove_file(&path).unwrap();
+        let scans = list_scans(&[job], 100, crate::translations::for_lang("de"));
+        assert_eq!(scans.len(), 1);
+        assert!(scans[0].paperless_attention);
+        drop(Config::default());
     }
 }

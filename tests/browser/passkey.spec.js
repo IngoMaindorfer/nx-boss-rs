@@ -189,4 +189,20 @@ test('passkey setup, login, replay rejection, and sensitive change', async ({ pa
   await expect(page).toHaveURL(`${origin}/login`);
   await page.getByRole('button', { name: 'Mit Passkey anmelden' }).click();
   await expect(page).toHaveURL(`${origin}/`);
+  // Recovery actions use the normal page, real session and fresh passkey assertions.
+  const opened = await context.request.post('http://127.0.0.1:12547/NmWebService/batch', { data: { job_id: 0 } });
+  expect(opened.status()).toBe(200);
+  const batchId = (await opened.json()).batch_id;
+  await page.goto(`${origin}/scans/${batchId}`);
+  await page.getByRole('button', { name: 'Abschließen und zustellen', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Abschließen und zustellen', exact: true })).toHaveCount(0);
+  expect(JSON.parse(fs.readFileSync(path.join(directory, 'scans', batchId, 'metadata.json'), 'utf8')).completed).toBe(true);
+  const corruptId = '0123456789abcdef0123456789abcdef';
+  fs.mkdirSync(path.join(directory, 'scans', corruptId));
+  await page.goto(`${origin}/scans/${corruptId}`);
+  await expect(page.getByText('Dieser Scan ist beschädigt.', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: 'Verwerfen', exact: true }).click();
+  await expect(page).toHaveURL(`${origin}/scans`);
+  expect(fs.existsSync(path.join(directory, 'scans', corruptId))).toBe(false);
+
 });
