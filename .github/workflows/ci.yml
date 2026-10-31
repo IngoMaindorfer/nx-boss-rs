@@ -106,6 +106,9 @@ jobs:
       - name: Test local scanning with unavailable Paperless configuration
         run: python3 scripts/test_paperless_pause.py ./target/release/nx-boss-rs
 
+      - name: Test Paperless outage and queued delivery without scanner relogin
+        run: python3 scripts/test_paperless_outage.py ./target/release/nx-boss-rs
+
       - name: Test structured logs and secret redaction
         run: python3 scripts/test_logging.py ./target/release/nx-boss-rs
 
