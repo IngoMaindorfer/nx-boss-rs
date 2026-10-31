@@ -15,3 +15,13 @@ Application code must not log tokens, passwords, headers, URL paths or queries, 
 The temporary scanner diagnostic is disabled by default. With `NX_BOSS_SCANNER_AUTH_PROBE=1`, `POST /NmWebService/authorization` emits `scanner.auth_probe`; scan setting, batch, and image requests emit `scanner.scan_probe`. These events contain a fixed header-scheme label (`basic`, `bearer`, `digest`, `other`, or `none`), a body-format label, allowlisted JSON property names, an unknown-property count, and filtered schema-like top-level field names with JSON types. Field-name filtering rejects values that appear elsewhere in the body. They do not log raw header contents, JSON values, or image bytes. Remove the setting and restart nx-boss after a device experiment. The binary logging test exercises this mode with synthetic credentials and rejects their appearance anywhere in the log.
 
 CI launches the actual binary, exercises scanner and admin routes with synthetic secrets, checks every line is JSON, verifies `X-Request-ID` correlation, and rejects those secrets anywhere in the log. This test is a regression gate for covered flows; review new log call sites when adding features.
+
+
+The private `/events` journal keeps at most 200 distinct redacted incident groups.
+An identical level/event/batch/error/status increments `count` and updates
+`last_seen`, retaining the first timestamp. The group moves to the newest position.
+A bounded background notification queue coalesces persistence (200 ms cadence);
+request tracing only updates memory. Shutdown explicitly flushes the journal.
+A crash can lose the most recent unflushed journal changes; Docker JSON logs
+remain the full stream. Journal persistence failure is visible in the UI and
+does not prevent scanning or a clean shutdown.

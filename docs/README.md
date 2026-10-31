@@ -2,6 +2,7 @@
 
 - [Architecture and delivery](architecture.md): boundaries, batch lifecycle and recovery.
 - [Scanner API (OpenAPI 3.1)](openapi.json): machine-readable contract; after admin login, browse it at `/api-docs` and download it from `/api/openapi.json`.
+- [Review deployment handoff](deployment-review-2026-10-31.md): prepared changes, operator deployment and rollback.
 - [Operations](operations.md): deployment, checks, backups and incident response.
 - [Admin passkeys](admin-passkeys.md): enrollment, passkey confirmation, recovery and test boundaries.
 - [Logging](logging.md): structured log fields and Grafana ingestion.

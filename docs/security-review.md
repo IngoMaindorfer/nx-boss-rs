@@ -1,6 +1,6 @@
 # Security review and next steps
 
-Status: 2026-10-01. This records code changes and decisions for the scanner and Paperless deployment. A green automated test suite does not establish compatibility with a physical scanner or an authenticated Paperless instance.
+Status: 2026-10-31 (review implementation, deployment pending). This records code changes and decisions for the scanner and Paperless deployment. A green automated test suite does not establish compatibility with a physical scanner or an authenticated Paperless instance.
 
 ## Findings addressed with regression tests
 
@@ -63,3 +63,12 @@ Do not configure both `consume_path` and the API for the same job unless duplica
 ## TDD sequence for further work
 
 For each change, add a failing test that demonstrates the observed risk, make the smallest implementation change, run the targeted test, then run the full suite and lint. Prioritize: scanner protocol mismatches found with the physical device; operator reconciliation for ambiguous Paperless uploads; resource usage under the maximum batch; descriptor-safe file access; non-root container operation; physical scanner and Paperless staging tests.
+
+
+The 31 October review implementation adds independent bounded login/confirmation
+pools, per-client login-start limits, named removable passkeys with session
+revocation, private/no-store admin responses, same-origin-only form destinations,
+and HSTS on Caddy TLS listeners. Tests now exercise the separate production
+routers. Recovery actions require fresh one-use passkey confirmation. See the
+[review answers](review-2026-10-31.md) for per-finding tests and commits and the
+[deployment handoff](deployment-review-2026-10-31.md) for operator-only checks.

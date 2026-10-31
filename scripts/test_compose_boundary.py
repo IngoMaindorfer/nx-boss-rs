@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 def compose_config(compose_files: list[str], ports: dict[str, int]) -> dict:
-    command = ["docker", "compose"]
+    command = ["docker", "compose", "--env-file", "/dev/null"]
     for path in compose_files:
         command += ["-f", path]
     command += ["config", "--format", "json"]

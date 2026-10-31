@@ -51,3 +51,20 @@ this does not change UTC timestamps in scan metadata. The shutdown integration
 check now explicitly covers `userpass`, rejects the old session after restart,
 and logs in again before completing the recovered batch. Actual fi-7300NX behavior
 after a 401 still requires the operator's physical test.
+
+
+## Changes ready for operator deployment, 31 October 2026
+
+[Deployment and rollback handoff](deployment-review-2026-10-31.md) records the
+review implementation. This work does not deploy or modify VM configuration.
+Admin HTML and images use `private, no-store`; CSP limits form submissions to
+self, and Caddy sends HSTS on its TLS listeners. Scanner device registration has
+a 16 KiB body limit and bounded fields; its observed unauthenticated wire contract
+is unchanged. Retention archives and sidecars are created with mode 0600.
+
+Missing/invalid Paperless credentials at startup pause API delivery while local
+scanning continues. `/settings/paperless` displays the paused state; correct and
+save the token there to resume. Previously generated token files are removed only
+after the replacement configuration is durable; disabling also removes the owned
+old token file. External token files and old backup copies are not deleted, and
+revoking the actual Paperless API token remains an operator action.
