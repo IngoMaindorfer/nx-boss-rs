@@ -95,7 +95,7 @@ test('dashboard totals and error browser describe the stored data', async ({ pag
   await expect(page.getByText('Aktuell gespeicherte Scan-Daten')).toBeVisible();
   await page.getByRole('link', { name: 'Fehlerprotokoll' }).click();
   await expect(page.getByRole('heading', { name: 'Fehlerprotokoll' })).toBeVisible();
-  await expect(page.getByText('Keine Warnungen oder Fehler aufgezeichnet.')).toBeVisible();
+  await expect(page.getByText('admin.trust_store_unavailable', { exact: true })).toBeVisible();
   await page.getByLabel('Sprache').selectOption('en');
   await expect(page.getByRole('heading', { name: 'Error log' })).toBeVisible();
 });

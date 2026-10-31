@@ -3,5 +3,8 @@
 <body><main><h1>nx-boss</h1><p class="auth-languages" aria-label="Sprache / Language"><a href="/language/de?next=/login">Deutsch</a> · <a href="/language/en?next=/login">English</a></p>
 <h2>{% if lang == "de" %}Admin-Anmeldung{% else %}Admin sign in{% endif %}</h2>
 <p role="alert" data-passkey-error hidden></p>
+<div class="trust-options"><label class="trust-choice"><input type="checkbox" name="trust_device"> <span>{% if lang == "de" %}Diesem Gerät 30 Tage vertrauen{% else %}Trust this device for 30 days{% endif %}</span></label>
+<label>{% if lang == "de" %}Gerätename (optional){% else %}Device name (optional){% endif %}<input name="device_name" maxlength="64" autocomplete="off"></label>
+<p class="trust-hint">{% if lang == "de" %}Nur auf eigenen Geräten mit Sperrbildschirm verwenden. Wer dieses entsperrte Gerät hat, kann Scans sehen, Jobs und Fristen ändern.{% else %}Use only on your own devices with a lock screen. Anyone with this unlocked device can view scans and change jobs and retention periods.{% endif %}</p></div>
 <button type="button" data-passkey-login>{% if lang == "de" %}Mit Passkey anmelden{% else %}Sign in with passkey{% endif %}</button>
 </main></body></html>

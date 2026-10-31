@@ -24,6 +24,7 @@ pub struct AdminAuth {
     directory: Arc<PathBuf>,
     pepper: Arc<Vec<u8>>,
     webauthn: Arc<Webauthn>,
+    trusted: Arc<Mutex<crate::trusted_devices::TrustedDevices>>,
 }
 #[derive(Default)]
 struct Inner {
@@ -69,6 +70,7 @@ struct Session {
     issued: Instant,
     last_seen: Instant,
     stepup_until: Option<Instant>,
+    trusted_device: Option<String>,
 }
 pub struct PasskeyView {
     pub id: String,
@@ -100,7 +102,7 @@ pub(crate) fn private_regular_file(path: &Path) -> Result<bool> {
     private_regular_file_with_limit(path, 8192)
 }
 
-fn private_regular_file_with_limit(path: &Path, limit: u64) -> Result<bool> {
+pub(crate) fn private_regular_file_with_limit(path: &Path, limit: u64) -> Result<bool> {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -173,6 +175,7 @@ fn issue_session(inner: &mut Inner) -> Result<String> {
             issued: now,
             last_seen: now,
             stepup_until: None,
+            trusted_device: None,
         },
     );
     Ok(token)
@@ -245,7 +248,12 @@ impl AdminAuth {
             }
             Some(token)
         };
+        let mut trusted = crate::trusted_devices::TrustedDevices::open(directory);
+        if passkey_account.is_none() {
+            trusted.forget_in_memory();
+        }
         Ok(Self {
+            trusted: Arc::new(Mutex::new(trusted)),
             inner: Arc::new(Mutex::new(Inner {
                 passkey_account,
                 setup_token,
@@ -272,7 +280,17 @@ impl AdminAuth {
             .map(|a| a.username.clone())
     }
     pub fn session_valid(&self, token: &str) -> bool {
-        valid_session(&mut crate::lock!(self.inner), token)
+        let mut inner = crate::lock!(self.inner);
+        if let Some(hash) = inner
+            .sessions
+            .get(token)
+            .and_then(|s| s.trusted_device.clone())
+            && !crate::lock!(self.trusted).valid_hash(&hash, chrono::Utc::now())
+        {
+            inner.sessions.remove(token);
+            return false;
+        }
+        valid_session(&mut inner, token)
     }
     #[cfg(test)]
     pub(crate) fn test_session(&self) -> String {
@@ -333,9 +351,13 @@ impl AdminAuth {
         updated.keys.retain(|key| credential_id(key) != id);
         anyhow::ensure!(updated.keys.len() + 1 == before, "unknown passkey");
         updated.names.remove(id);
+        crate::lock!(self.trusted).revoke(None)?;
         self.persist_passkeys(&updated)?;
         inner.passkey_account = Some(updated);
         inner.sessions.retain(|token, _| token == session);
+        if let Some(active) = inner.sessions.get_mut(session) {
+            active.trusted_device = None;
+        }
         inner.passkey_authentications.clear();
         inner.passkey_registrations.clear();
         Ok(true)
@@ -414,6 +436,7 @@ impl AdminAuth {
             names: HashMap::from([(credential_id(&key), pending.name)]),
             keys: vec![key],
         };
+        crate::lock!(self.trusted).revoke(None)?;
         self.persist_passkeys(&account)?;
         inner.passkey_account = Some(account);
         inner.setup_token = None;
@@ -689,6 +712,91 @@ impl AdminAuth {
         crate::lock!(self.inner).sessions.remove(token);
     }
 
+    pub fn trust_device(&self, session: &str, name: &str) -> Result<String> {
+        let mut inner = crate::lock!(self.inner);
+        anyhow::ensure!(
+            valid_session(&mut inner, session),
+            "admin session unavailable"
+        );
+        let token = random_hex()?;
+        let hash = crate::lock!(self.trusted).issue(&token, name, chrono::Utc::now())?;
+        inner
+            .sessions
+            .get_mut(session)
+            .expect("validated session")
+            .trusted_device = Some(hash);
+        Ok(token)
+    }
+    pub fn trusted_cookie_valid(&self, token: &str) -> bool {
+        crate::lock!(self.trusted).valid_token(token, chrono::Utc::now())
+    }
+    pub fn restore_trusted_session(&self, token: &str) -> Result<Option<String>> {
+        let mut inner = crate::lock!(self.inner);
+        let Some(hash) = crate::lock!(self.trusted).use_token(token, chrono::Utc::now())? else {
+            return Ok(None);
+        };
+        let session = issue_session(&mut inner)?;
+        inner
+            .sessions
+            .get_mut(&session)
+            .expect("issued session")
+            .trusted_device = Some(hash);
+        Ok(Some(session))
+    }
+    pub fn trusted_devices(
+        &self,
+        current: Option<&str>,
+    ) -> Vec<crate::trusted_devices::DeviceView> {
+        crate::lock!(self.trusted).list(current)
+    }
+    pub fn revoke_trusted_devices(&self, session: &str, id: Option<&str>) -> Result<bool> {
+        if !self.consume_passkey_stepup(session) {
+            return Ok(false);
+        }
+        let mut inner = crate::lock!(self.inner);
+        let removed = crate::lock!(self.trusted).revoke(id)?;
+        anyhow::ensure!(
+            id.is_none() || !removed.is_empty(),
+            "unknown trusted device"
+        );
+        inner.sessions.retain(|_, s| {
+            s.trusted_device
+                .as_ref()
+                .is_none_or(|hash| !removed.contains(hash))
+        });
+        Ok(true)
+    }
+    pub fn logout_with_trust(&self, session: Option<&str>, token: Option<&str>) -> Result<()> {
+        let mut inner = crate::lock!(self.inner);
+        let associated = session
+            .and_then(|session| inner.sessions.remove(session))
+            .and_then(|s| s.trusted_device);
+        let mut store = crate::lock!(self.trusted);
+        let revoked = (|| -> Result<Vec<String>> {
+            let mut removed = Vec::new();
+            if let Some(token) = token {
+                removed.extend(store.revoke_token(token)?);
+            }
+            if let Some(hash) = associated {
+                removed.extend(store.revoke(Some(&hash))?);
+            }
+            Ok(removed)
+        })();
+        match revoked {
+            Ok(removed) => inner.sessions.retain(|_, s| {
+                s.trusted_device
+                    .as_ref()
+                    .is_none_or(|hash| !removed.contains(hash))
+            }),
+            Err(error) => {
+                store.forget_in_memory();
+                inner.sessions.retain(|_, s| s.trusted_device.is_none());
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
     pub fn hash_secret(&self, password: &str) -> Result<String> {
         crate::scanner_auth::hash_password(password, &self.pepper)
     }
@@ -701,6 +809,23 @@ impl AdminAuth {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn logout_revokes_associated_device_even_if_client_cookie_is_missing() {
+        for restored in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let auth = AdminAuth::open(root.path(), &[0x42; 32]).unwrap();
+            let original = auth.test_session();
+            let token = auth.trust_device(&original, "Laptop").unwrap();
+            let session = if restored {
+                auth.restore_trusted_session(&token).unwrap().unwrap()
+            } else {
+                original
+            };
+            auth.logout_with_trust(Some(&session), None).unwrap();
+            assert!(!auth.trusted_cookie_valid(&token));
+        }
+    }
+
     #[test]
     fn session_confirmation_is_one_use_and_logout_revokes_access() {
         let dir = tempfile::tempdir().unwrap();

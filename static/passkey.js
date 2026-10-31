@@ -64,11 +64,11 @@
     }
     return response.json();
   };
-  const authenticate = async (start, finish) => {
+  const authenticate = async (start, finish, options = {}) => {
     const { flow, challenge } = await post(start);
     const credential = await navigator.credentials.get({ publicKey: requestOptions(challenge) });
     if (!credential) throw new Error('No passkey selected');
-    return post(finish, { flow, credential: credentialJSON(credential, false) });
+    return post(finish, { flow, credential: credentialJSON(credential, false), ...options });
   };
   const register = async (start, finish, body = {}) => {
     const { flow, challenge } = await post(start, body);
@@ -125,7 +125,7 @@
     const button = event.currentTarget;
     button.disabled = true;
     try {
-      await authenticate('/passkey/login/start', '/passkey/login/finish');
+      await authenticate('/passkey/login/start', '/passkey/login/finish', { trust_device: document.querySelector('[name=trust_device]')?.checked === true, device_name: document.querySelector('[name=device_name]')?.value.trim() || '' });
       window.location.assign('/');
     } catch (error) { report(error); button.disabled = false; }
   });
@@ -146,6 +146,17 @@
       try {
         await authenticate('/passkey/stepup/start', '/passkey/stepup/finish');
         await post('/passkey/account/remove', { key_id: button.dataset.passkeyRemove });
+        window.location.reload();
+      } catch (error) { report(error); button.disabled = false; }
+    });
+  });
+
+  document.querySelectorAll('[data-trusted-remove], [data-trusted-remove-all]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      try {
+        await authenticate('/passkey/stepup/start', '/passkey/stepup/finish');
+        await post(button.hasAttribute('data-trusted-remove-all') ? '/account/trusted/remove-all' : '/account/trusted/remove', { device_id: button.dataset.trustedRemove });
         window.location.reload();
       } catch (error) { report(error); button.disabled = false; }
     });

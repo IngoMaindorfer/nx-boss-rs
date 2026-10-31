@@ -79,6 +79,7 @@ mod scanner_auth;
 mod security;
 mod state;
 mod translations;
+mod trusted_devices;
 
 #[derive(Parser)]
 #[command(about = "PaperStream NX Manager compatible server")]
