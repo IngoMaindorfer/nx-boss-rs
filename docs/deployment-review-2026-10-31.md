@@ -14,8 +14,11 @@ ausgeführt. Der vorherige Wartungsstand auf der VM bleibt davon getrennt.
 6. Homelab-Startdateien des alten Stacks entfernt, Verweise korrigiert. Homelab bleibt uncommittet. B07 ist ausschließlich ein Vorschlag im Review; B24 bleibt erhalten.
 
 Die Antworten unter jedem Befund im [Review](review-2026-10-31.md) nennen
-Code-Commits und Regressionstests. CI/PR-Nachweise werden nach Abschluss dort
-und in der Implementierungs-PR verknüpft.
+Code-Commits und Regressionstests. Die Implementierung ist in [PR #24](https://github.com/IngoMaindorfer/nx-boss-rs/pull/24)
+nach zwei vollständig grünen CI-Läufen gemergt (b637763). Der direkte
+Main-CI-Lauf ist [41193238821](https://github.com/IngoMaindorfer/nx-boss-rs/actions/runs/41193238821).
+Der Baseline-Nachweis ist [41190318861](https://github.com/IngoMaindorfer/nx-boss-rs/actions/runs/41190318861);
+die zuvor versehentlich genannten IDs waren erfolgreiche Dependabot-Läufe.
 
 ## Deployment durch den Betreiber
 
