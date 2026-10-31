@@ -940,6 +940,44 @@ mod idle_recovery_tests {
         (root, state, auth, session, server, batch.id)
     }
     #[tokio::test]
+    async fn invalid_activity_timestamp_is_corrupt_and_discardable_except_confirmed_delivery() {
+        for delivered in [false, true] {
+            let (root, state, auth, session, server, id) = fixture(2, delivered);
+            let path = root.path().join(&id).join("metadata.json");
+            let mut meta: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            meta["created_at"] = json!("not-a-timestamp");
+            if delivered {
+                meta["paperless"] = json!({"document_id":42,"task_id":null,"last_error":null});
+            }
+            std::fs::write(&path, serde_json::to_vec(&meta).unwrap()).unwrap();
+            crate::lock!(state.batches).clear();
+            let page = server
+                .get(&format!("/scans/{id}"))
+                .add_header("cookie", format!("__Host-nx-admin={session}"))
+                .await
+                .text();
+            assert!(page.contains("Dieser Scan ist beschädigt"));
+            assert_eq!(
+                page.contains(&format!("action=\"/scans/{id}/discard\"")),
+                !delivered
+            );
+            auth.test_confirm_stepup(&session);
+            let response = server
+                .post(&format!("/scans/{id}/discard"))
+                .add_header("cookie", format!("__Host-nx-admin={session}"))
+                .add_header("origin", "https://localhost")
+                .add_header("x-forwarded-proto", "https")
+                .form(&[("unused", "")])
+                .await;
+            assert_eq!(response.status_code(), if delivered { 409 } else { 303 });
+            if delivered {
+                assert!(auth.consume_passkey_stepup(&session));
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn latest_page_activity_controls_recovery_and_buttons() {
         let (_root, state, auth, session, server, id) = fixture(2, false);
         let batch = crate::lock!(state.batches).get(&id).cloned().unwrap();

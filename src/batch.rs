@@ -202,8 +202,12 @@ impl Batch {
 
     pub(crate) fn inspect_directory(dir: &Path) -> Result<BatchMetadata> {
         let mut metadata = Self::read_metadata(dir)?;
+        if chrono::DateTime::parse_from_rfc3339(&metadata.created_at).is_err() {
+            return Err(CorruptBatchError.into());
+        }
         for page in &mut metadata.files {
-            if page.filename.starts_with('.')
+            if chrono::DateTime::parse_from_rfc3339(&page.received_at).is_err()
+                || page.filename.starts_with('.')
                 || !page
                     .filename
                     .bytes()
