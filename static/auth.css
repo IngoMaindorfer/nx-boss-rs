@@ -37,3 +37,10 @@ input, select { padding: .65rem; border: 1px solid #8b94a4; border-radius: .35re
 button { padding: .7rem; background: #1a237e; color: white; border: 0; border-radius: .35rem; font: inherit; cursor: pointer; }
 code.break { overflow-wrap: anywhere; }
 p[role=alert] { color: #b42318; }
+
+main { box-sizing: border-box; }
+.secret-field { display: flex; align-items: stretch; gap: .5rem; margin-top: .3rem; }
+.secret-field input { flex: 1; min-width: 0; width: 0; }
+button.secret-toggle { flex: none; background: transparent; color: var(--auth-heading); border: 1px solid #8b94a4; padding: .5rem; }
+.secret-toggle[hidden] { display: none; }
+input::-ms-reveal { display: none; }

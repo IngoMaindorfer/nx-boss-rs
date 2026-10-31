@@ -57,6 +57,50 @@ test.afterAll(async () => {
   if (directory) fs.rmSync(directory, { recursive: true, force: true });
 });
 
+test('setup visibility, keyboard, mobile layout and distinct errors in both languages', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.emulateMedia({ colorScheme: 'dark' });
+  for (const lang of ['de', 'en']) {
+    await page.goto(`${origin}/language/${lang}?next=/setup`);
+    const field = page.locator('[name=token]');
+    const toggle = page.locator('[data-secret-toggle]');
+    await expect(field).toHaveAttribute('type', 'password');
+    await expect(field).toHaveAttribute('spellcheck', 'false');
+    await expect(field).toHaveAttribute('autocapitalize', 'off');
+    await expect(toggle).toHaveText(lang === 'de' ? 'Anzeigen' : 'Show');
+    let submissions = 0;
+    const onRequest = (request) => { if (request.url().endsWith('/passkey/setup/start')) submissions += 1; };
+    page.on('request', onRequest);
+    await toggle.focus();
+    await page.keyboard.press('Space');
+    await expect(field).toHaveAttribute('type', 'text');
+    await expect(toggle).toHaveText(lang === 'de' ? 'Verbergen' : 'Hide');
+    await page.keyboard.press('Enter');
+    await expect(field).toHaveAttribute('type', 'password');
+    expect(submissions).toBe(0);
+    page.off('request', onRequest);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: `/tmp/nx-setup-${lang}-mobile-dark.png` });
+    await field.fill('not-the-setup-code');
+    await page.locator('[name=username]').fill('browser-admin');
+    for (const status of [401, 403]) {
+      await page.route('**/passkey/setup/start', (route) => route.fulfill({ status }));
+      await page.locator('button[type=submit]').click();
+      const error = page.locator('[data-passkey-error]');
+      await expect(error).toContainText(status === 401
+        ? (lang === 'de' ? 'Einrichtungscode ist falsch oder abgelaufen' : 'Setup code is incorrect or expired')
+        : 'https://nx.maindorfer.name');
+      await page.unroute('**/passkey/setup/start');
+    }
+    await field.fill(fs.readFileSync(path.join(directory, 'admin-setup-token'), 'utf8'));
+    await page.evaluate(() => Object.defineProperty(navigator.credentials, 'create', {
+      configurable: true, value: async () => { throw new DOMException('cancelled', 'NotAllowedError'); },
+    }));
+    await page.locator('button[type=submit]').click();
+    await expect(page.locator('[data-passkey-error]')).toContainText(lang === 'de' ? 'Vorgang wurde abgebrochen' : 'Operation was cancelled');
+  }
+});
+
 test('passkey setup, login, replay rejection, and sensitive change', async ({ page, context }) => {
   const passkeyResponses = [];
   page.on('response', (response) => {
@@ -75,10 +119,19 @@ test('passkey setup, login, replay rejection, and sensitive change', async ({ pa
     headers: { origin }, form: { token, username: 'browser-admin' }, failOnStatusCode: false,
   });
   expect(legacySetup.status()).toBe(404);
-  await page.locator('[name=token]').fill(token);
+  await page.locator('[name=token]').fill(`${token} `);
+  await page.locator('[data-secret-toggle]').click();
+  await page.evaluate(() => {
+    const create = navigator.credentials.create.bind(navigator.credentials);
+    Object.defineProperty(navigator.credentials, 'create', { configurable: true, value: async (options) => {
+      sessionStorage.setItem('setupWasHidden', String(document.querySelector('[name=token]').type === 'password'));
+      return create(options);
+    } });
+  });
   await page.locator('[name=username]').fill('browser-admin');
   await page.getByRole('button', { name: 'Passkey erstellen' }).click();
   await expect(page).toHaveURL(`${origin}/`);
+  expect(await page.evaluate(() => sessionStorage.getItem('setupWasHidden'))).toBe('true');
   await expect(page.locator('[data-passkey-error]')).toHaveCount(0);
   expect(fs.existsSync(path.join(directory, 'admin-passkeys.json'))).toBe(true);
   expect(fs.existsSync(path.join(directory, 'admin-setup-token'))).toBe(false);
