@@ -115,10 +115,6 @@ test('passkey setup, login, replay rejection, and sensitive change', async ({ pa
   } });
   await page.goto(`${origin}/setup`);
   const token = fs.readFileSync(path.join(directory, 'admin-setup-token'), 'utf8');
-  const legacySetup = await context.request.post(`${origin}/setup/prepare`, {
-    headers: { origin }, form: { token, username: 'browser-admin' }, failOnStatusCode: false,
-  });
-  expect(legacySetup.status()).toBe(404);
   await page.locator('[name=token]').fill(`${token} `);
   await page.locator('[data-secret-toggle]').click();
   await page.evaluate(() => {
@@ -135,6 +131,11 @@ test('passkey setup, login, replay rejection, and sensitive change', async ({ pa
   await expect(page.locator('[data-passkey-error]')).toHaveCount(0);
   expect(fs.existsSync(path.join(directory, 'admin-passkeys.json'))).toBe(true);
   expect(fs.existsSync(path.join(directory, 'admin-setup-token'))).toBe(false);
+  for (const pathname of ['/login', '/setup/prepare', '/setup/complete', '/account', '/account/totp/prepare', '/account/totp/complete']) {
+    const removed = await context.request.post(`${origin}${pathname}`, { headers: { origin }, data: {}, failOnStatusCode: false });
+    expect([404, 405]).toContain(removed.status());
+  }
+
 
   await page.goto(`${origin}/account`);
   await page.route('**/passkey/account/add/start', async (route) => {

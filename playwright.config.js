@@ -7,7 +7,7 @@ module.exports = defineConfig({
   workers: 1,
   reporter: process.env.CI ? [['line'], ['html', { open: 'never' }]] : 'list',
   use: {
-    baseURL: 'https://127.0.0.1:12449',
+    baseURL: 'https://localhost:12449',
     ignoreHTTPSErrors: true,
     storageState: '/tmp/nx-boss-browser-storage.json',
     browserName: 'chromium',
@@ -18,7 +18,7 @@ module.exports = defineConfig({
   },
   webServer: {
     command: 'bash scripts/serve_playwright.sh',
-    url: 'https://127.0.0.1:12449/login',
+    url: 'https://localhost:12449/login',
     ignoreHTTPSErrors: true,
     reuseExistingServer: false,
     timeout: 120000,

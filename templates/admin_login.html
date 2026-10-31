@@ -2,7 +2,6 @@
 <html lang="{{ lang }}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>nx-boss – Login</title><link rel="stylesheet" href="/static/auth.css"><script src="/static/ui-preferences.js" defer></script><script src="/static/passkey.js" defer></script></head>
 <body><main><h1>nx-boss</h1><p class="auth-languages" aria-label="Sprache / Language"><a href="/language/de?next=/login">Deutsch</a> · <a href="/language/en?next=/login">English</a></p>
 <h2>{% if lang == "de" %}Admin-Anmeldung{% else %}Admin sign in{% endif %}</h2>
-{% if error %}<p role="alert">{% if lang == "de" %}Anmeldung fehlgeschlagen.{% else %}Sign in failed.{% endif %}</p>{% endif %}<p role="alert" data-passkey-error hidden></p>
-{% if passkey_enabled %}<button type="button" data-passkey-login>{% if lang == "de" %}Mit Passkey anmelden{% else %}Sign in with passkey{% endif %}</button>
-{% else %}<form method="post" action="/login"><label>{% if lang == "de" %}Benutzername{% else %}Username{% endif %}<input name="username" autocomplete="username" required maxlength="64"></label><label>{% if lang == "de" %}Passwort{% else %}Password{% endif %}<input name="password" type="password" autocomplete="current-password" required></label><label>TOTP<input name="code" inputmode="numeric" autocomplete="one-time-code" required maxlength="8"></label><button type="submit">{% if lang == "de" %}Anmelden{% else %}Sign in{% endif %}</button></form>{% endif %}
+<p role="alert" data-passkey-error hidden></p>
+<button type="button" data-passkey-login>{% if lang == "de" %}Mit Passkey anmelden{% else %}Sign in with passkey{% endif %}</button>
 </main></body></html>

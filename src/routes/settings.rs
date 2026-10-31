@@ -24,7 +24,6 @@ struct ScannerSecurityTpl {
     error: bool,
     saved: bool,
     lang: &'static str,
-    passkey_enabled: bool,
 }
 
 #[derive(Template)]
@@ -38,7 +37,6 @@ struct PaperlessSettingsTpl {
     saved: bool,
     error: bool,
     lang: &'static str,
-    passkey_enabled: bool,
 }
 
 #[derive(Deserialize)]
@@ -48,10 +46,6 @@ pub struct PaperlessSettingsForm {
     tags: String,
     field_id: String,
     new_token: String,
-    #[serde(default)]
-    admin_password: String,
-    #[serde(default)]
-    admin_code: String,
 }
 
 fn paperless_view(state: &AppState, headers: &HeaderMap, saved: bool, error: bool) -> Response {
@@ -74,10 +68,6 @@ fn paperless_view(state: &AppState, headers: &HeaderMap, saved: bool, error: boo
         saved,
         error,
         lang: security_lang(headers),
-        passkey_enabled: state
-            .admin_auth
-            .as_ref()
-            .is_some_and(|auth| auth.passkey_configured()),
     })
 }
 
@@ -97,19 +87,14 @@ pub async fn paperless_post(
         || form.tags.len() > 512
         || form.field_id.len() > 16
         || form.new_token.len() > 4096
-        || form.admin_password.len() > 512
-        || form.admin_code.len() > 16
     {
         return StatusCode::BAD_REQUEST.into_response();
     }
     let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    let authorized = if auth.passkey_configured() {
-        super::admin_cookie(&headers).is_some_and(|session| auth.consume_passkey_stepup(session))
-    } else {
-        auth.reauthenticate(&form.admin_password, &form.admin_code)
-    };
+    let authorized =
+        super::admin_cookie(&headers).is_some_and(|session| auth.consume_passkey_stepup(session));
     if !authorized {
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -164,10 +149,6 @@ pub struct ScannerSecurityForm {
     mode: String,
     username: String,
     new_password: String,
-    #[serde(default)]
-    admin_password: String,
-    #[serde(default)]
-    admin_code: String,
 }
 
 fn security_lang(headers: &HeaderMap) -> &'static str {
@@ -202,10 +183,6 @@ fn scanner_security_view(
         error,
         saved,
         lang: security_lang(headers),
-        passkey_enabled: state
-            .admin_auth
-            .as_ref()
-            .is_some_and(|auth| auth.passkey_configured()),
     })
 }
 
@@ -221,21 +198,14 @@ pub async fn scanner_security_post(
     if !super::admin::secure_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    if form.admin_password.len() > 512
-        || form.new_password.len() > 512
-        || form.admin_code.len() > 16
-        || form.username.len() > 128
-    {
+    if form.new_password.len() > 512 || form.username.len() > 128 {
         return StatusCode::BAD_REQUEST.into_response();
     }
     let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    let authorized = if auth.passkey_configured() {
-        super::admin_cookie(&headers).is_some_and(|session| auth.consume_passkey_stepup(session))
-    } else {
-        auth.reauthenticate(&form.admin_password, &form.admin_code)
-    };
+    let authorized =
+        super::admin_cookie(&headers).is_some_and(|session| auth.consume_passkey_stepup(session));
     if !authorized {
         return StatusCode::UNAUTHORIZED.into_response();
     }

@@ -128,10 +128,7 @@ async fn csrf_check(req: Request, next: Next) -> Response {
     let is_mutation = matches!(req.method().as_str(), "POST" | "PUT" | "PATCH" | "DELETE");
     let is_scanner = req.uri().path().starts_with("/NmWebService/");
 
-    let is_auth = matches!(
-        req.uri().path(),
-        "/login" | "/setup/prepare" | "/setup/complete"
-    );
+    let is_auth = req.uri().path() == "/login";
     if is_mutation && !is_scanner && !is_auth {
         let hx = req
             .headers()
@@ -180,11 +177,7 @@ async fn admin_session_gate(State(state): State<AppState>, req: Request, next: N
     if !auth.configured() {
         if matches!(
             path,
-            "/setup"
-                | "/setup/prepare"
-                | "/setup/complete"
-                | "/passkey/setup/start"
-                | "/passkey/setup/finish"
+            "/setup" | "/passkey/setup/start" | "/passkey/setup/finish"
         ) {
             return next.run(req).await;
         }
@@ -387,7 +380,7 @@ async fn job_rows_script() -> impl IntoResponse {
 
 fn admin_routes() -> Router<AppState> {
     Router::new()
-        .route("/login", get(admin::login_get).post(admin::login_post))
+        .route("/login", get(admin::login_get))
         .route("/passkey/login/start", post(admin::passkey_login_start))
         .route("/passkey/login/finish", post(admin::passkey_login_finish))
         .route("/passkey/setup/start", post(admin::passkey_setup_start))
@@ -401,14 +394,7 @@ fn admin_routes() -> Router<AppState> {
         )
         .route("/logout", post(admin::logout_post))
         .route("/setup", get(admin::setup_get))
-        .route("/setup/prepare", post(admin::setup_prepare))
-        .route("/setup/complete", post(admin::setup_complete))
-        .route(
-            "/account",
-            get(admin::account_get).post(admin::account_post),
-        )
-        .route("/account/totp/prepare", post(admin::totp_prepare))
-        .route("/account/totp/complete", post(admin::totp_complete))
+        .route("/account", get(admin::account_get))
         .route("/static/htmx.min.js", get(htmx_script))
         .route("/static/auth.css", get(auth_css))
         .route("/static/scan-rows.js", get(scan_rows_script))
@@ -708,25 +694,12 @@ mod tests {
     async fn configured_admin_requires_session_and_logout_revokes_it() {
         let dir = tempfile::tempdir().unwrap();
         let auth = crate::admin_auth::AdminAuth::open(dir.path(), &[0x42; 32]).unwrap();
-        let token = std::fs::read_to_string(dir.path().join("admin-setup-token")).unwrap();
-        let preview = auth.prepare_setup(&token, "owner").unwrap();
-        let secret = base32::decode(
-            base32::Alphabet::Rfc4648 { padding: false },
-            &preview.manual_secret,
-        )
-        .unwrap();
-        let code = crate::admin_auth::totp(&secret)
-            .unwrap()
-            .generate_current()
-            .to_string();
-        let session = auth
-            .complete_setup(&token, "a sufficiently long password", &code)
-            .unwrap();
-        let server = TestServer::new(super::admin_router_with_hosts(
-            AppState::new(Config::default()).with_admin_auth(auth),
-            vec!["localhost".into()],
-        ));
-        assert_eq!(server.get("/").await.status_code(), 303);
+        let session = auth.test_session();
+        let state = AppState {
+            admin_auth: Some(auth),
+            ..AppState::new(Config::default())
+        };
+        let server = TestServer::new(super::admin_router(state));
         let cookie = format!("__Host-nx-admin={session}");
         assert_eq!(
             server

@@ -1,6 +1,9 @@
 # Admin passkeys
 
-New installations enroll one local Admin with a WebAuthn passkey. OIDC is deferred. TOTP is not part of the new login yet. An existing password/TOTP account remains readable for compatibility, but the old setup endpoints are disabled unless the isolated browser-test environment explicitly enables them.
+The Admin uses one local account with WebAuthn passkeys. Password and one-time-code
+login have been removed. If `config/admin-auth.json` exists, startup stops with a
+clear error before creating a new setup code. A host operator must back up and
+explicitly remove that obsolete file before enrolling a passkey. OIDC is deferred.
 
 ```mermaid
 sequenceDiagram
