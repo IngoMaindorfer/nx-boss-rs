@@ -1,31 +1,168 @@
+# External ports are configurable; internal ports are shared by nx-boss and Caddy.
+# Keep the values here so port mappings, listeners, and upstreams cannot drift.
+x-nx-boss-ports:
+  scanner-http: &scanner_http_port "${NX_BOSS_SCANNER_PORT:-20447}"
+  scanner-https: &scanner_https_port "${NX_BOSS_SCANNER_HTTPS_PORT:-20448}"
+  admin-https: &admin_https_port "${NX_BOSS_ADMIN_HTTPS_PORT:-443}"
+  scanner-upstream: &scanner_upstream_port "${NX_BOSS_INTERNAL_SCANNER_PORT:-10447}"
+  admin-upstream: &admin_upstream_port "${NX_BOSS_INTERNAL_ADMIN_PORT:-10448}"
+
 services:
   nx-boss-rs:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: app
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
+    image: ${NX_BOSS_IMAGE:-nx-boss-rs:local}
+    user: "${NX_BOSS_UID:-1000}:${NX_BOSS_GID:-1000}"
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:10447:10447"
+    stop_grace_period: 180s
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    command:
+      - --config
+      - /config/config.yaml
+      - --host
+      - 0.0.0.0
+      - --port
+      - *scanner_upstream_port
+      - --admin-host
+      - 0.0.0.0
+      - --admin-port
+      - *admin_upstream_port
+      - --admin-allowed-host
+      - "${NX_BOSS_ADMIN_IP:-127.0.0.1}"
+      - --admin-allowed-host
+      - "${NX_BOSS_ADMIN_DOMAIN:-127.0.0.1}"
     volumes:
-      - ./config.yaml:/config/config.yaml:ro
-      - scans:/data
+      - type: bind
+        source: ./config
+        target: /config
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./scans
+        target: /data
+        bind:
+          create_host_path: false
+    secrets:
+      - auth_pepper
     environment:
-      - RUST_LOG=nx_boss_rs=info
+      - NX_BOSS_AUTH_PEPPER_FILE=/run/secrets/auth_pepper
+      - NX_BOSS_ADMIN_DOMAIN=${NX_BOSS_ADMIN_DOMAIN:-nx.maindorfer.name}
+      - NX_BOSS_ADMIN_HTTPS_PORT=${NX_BOSS_ADMIN_HTTPS_PORT:-443}
+      - NX_BOSS_LOG_LEVEL=${NX_BOSS_LOG_LEVEL:-info}
+      - NX_BOSS_SCANNER_AUTH_PROBE=${NX_BOSS_SCANNER_AUTH_PROBE:-0}
+      - NX_BOSS_SCANNER_AUTH_EXPERIMENT=${NX_BOSS_SCANNER_AUTH_EXPERIMENT:-}
+      - NX_BOSS_SCANNER_AUTH_MODE=${NX_BOSS_SCANNER_AUTH_MODE:-none}
+      - NX_BOSS_SCANNER_USERNAME=${NX_BOSS_SCANNER_USERNAME:-}
+      - NX_BOSS_SCANNER_PASSWORD_FILE=${NX_BOSS_SCANNER_PASSWORD_FILE:-}
+      - PAPERLESS_API_TOKEN=${PAPERLESS_API_TOKEN:-}
+      - NX_BOSS_OUTPUT_PATH=/data
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "5"
     healthcheck:
-      test: ["CMD", "/wget", "-q", "--spider", "http://localhost:10447/health"]
+      test: ["CMD", "/nx-boss-rs", "--healthcheck", "--port", *scanner_upstream_port]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
     networks:
-      - internal
+      - backend
 
-volumes:
-  scans:
+  caddy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: caddy
+    image: nx-boss-caddy:cloudflare-a8737d0
+    entrypoint: ["/bin/sh", "/usr/local/bin/start-caddy.sh"]
+    command: ["run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+    user: "${NX_BOSS_UID:-1000}:${NX_BOSS_GID:-1000}"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    ports:
+      - host_ip: "${NX_BOSS_SERVER_IP:-127.0.0.1}"
+        published: *scanner_http_port
+        target: *scanner_http_port
+        protocol: tcp
+      - host_ip: "${NX_BOSS_SERVER_IP:-127.0.0.1}"
+        published: *scanner_https_port
+        target: *scanner_https_port
+        protocol: tcp
+      - host_ip: "${NX_BOSS_ADMIN_IP:-127.0.0.1}"
+        published: *admin_https_port
+        target: *admin_https_port
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: ./deploy/Caddyfile
+        target: /etc/caddy/Caddyfile
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./caddy-acme/data
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./caddy-acme/config
+        target: /config
+        bind:
+          create_host_path: false
+    environment:
+      NX_BOSS_ADMIN_IP: "${NX_BOSS_ADMIN_IP:-127.0.0.1}"
+      NX_BOSS_ADMIN_DOMAIN: "${NX_BOSS_ADMIN_DOMAIN:-nx.maindorfer.name}"
+      NX_BOSS_SCANNER_HTTP_PORT: *scanner_http_port
+      NX_BOSS_SCANNER_HTTPS_PORT: *scanner_https_port
+      NX_BOSS_ADMIN_HTTPS_PORT: *admin_https_port
+      NX_BOSS_UPSTREAM_SCANNER_PORT: *scanner_upstream_port
+      NX_BOSS_UPSTREAM_ADMIN_PORT: *admin_upstream_port
+    secrets:
+      - cloudflare_api_token
+    depends_on:
+      nx-boss-rs:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:${NX_BOSS_SCANNER_PORT:-20447}/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    networks:
+      - backend
 
 networks:
-  internal:
-    internal: true
+  backend: {} # outbound connection for the Paperless API
+
+secrets:
+  auth_pepper:
+    file: ./secrets/auth_pepper
+  cloudflare_api_token:
+    file: ./secrets/cloudflare_api_token

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Simulates the full PaperStream NX Manager scanner flow against a running nx-boss server.
-# Usage: ./scripts/test_scan.sh [HOST:PORT] [SCAN_OUTPUT_DIR]
-#   HOST:PORT        default: 127.0.0.1:10447
+# Usage: ./scripts/test_scan.sh [HOST:PORT|BASE_URL] [SCAN_OUTPUT_DIR]
+#   HOST:PORT        default: 127.0.0.1:10447 (HTTP)
+#   BASE_URL         e.g. https://nx.maindorfer.name:20448
 #   SCAN_OUTPUT_DIR  where the server writes scans (default: ./scans)
 #
 # Requires: curl, python3
@@ -10,7 +11,10 @@ set -euo pipefail
 
 BASE="${1:-127.0.0.1:10447}"
 SCAN_DIR="${2:-./scans}"
-URL="http://$BASE/NmWebService"
+case "$BASE" in
+    http://*|https://*) URL="${BASE%/}/NmWebService" ;;
+    *) URL="http://$BASE/NmWebService" ;;
+esac
 PASS=0
 FAIL=0
 
@@ -125,8 +129,8 @@ check "DELETE /accesstoken returns 200 body" "$r" 'application/json'
 
 # 10. Disk checks
 echo "--- disk check ---"
-BATCH_DIR=$(find "$SCAN_DIR" -maxdepth 2 -name "metadata.json" | xargs -I{} dirname {} 2>/dev/null | head -1 || true)
-if [ -n "$BATCH_DIR" ]; then
+BATCH_DIR="$SCAN_DIR/$BATCH_ID"
+if [ -f "$BATCH_DIR/metadata.json" ]; then
     green "  PASS  batch dir found: $BATCH_DIR"
     PASS=$((PASS+1))
     for page in page001.jpg page002.jpg; do

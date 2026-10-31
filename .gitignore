@@ -1,8 +1,21 @@
 # Rust
 /target
 
-# Local runtime config — use config.example.yaml as template
-config.yaml
+# Local runtime config — use examples/config.yaml as template
+/config.yaml
+config/
+.env
+.env.*
+/token
+/dns_key
+/secrets/
+/certs/
+/backups/
+/caddy-acme/
+/caddy-local/
+/node_modules/
+/playwright-report/
+/test-results/
 
 # Scan output and consume delivery — never commit user data
 scans/

@@ -1,0 +1,125 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "nx-boss Scanner API",
+    "version": "0.1.5",
+    "description": "Observed and implemented subset of the PaperStream NX Manager protocol for the fi-7300NX. This describes nx-boss, not a public Ricoh specification. The browser admin interface is HTML/form based and is outside this scanner API. In userpass mode scanner login and all scan operations require HTTPS. In none mode HTTP is also accepted. Scanner sessions expire after eight hours and are invalidated by restart."
+  },
+  "servers": [
+    {
+      "url": "https://{host}:{port}",
+      "description": "Caddy scanner HTTPS listener; host must match the certificate",
+      "variables": {
+        "host": { "default": "nx.maindorfer.name", "description": "Example deployment hostname; replace for your installation" },
+        "port": { "default": "20448" }
+      }
+    }
+  ],
+  "tags": [
+    { "name": "Connection", "description": "Health and device registration" },
+    { "name": "Authentication", "description": "Scanner negotiation and session lifetime" },
+    { "name": "Scanning", "description": "Job settings, batch lifecycle and page upload" }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": ["Connection"], "summary": "Scanner listener health", "operationId": "scannerHealth", "security": [],
+        "responses": { "200": { "description": "Healthy; empty body" } }
+      }
+    },
+    "/NmWebService/heartbeat": {
+      "get": {
+        "tags": ["Connection"], "summary": "Heartbeat", "operationId": "heartbeat", "security": [],
+        "responses": { "200": { "description": "Current server time", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SystemTime" } } } } }
+      }
+    },
+    "/NmWebService/device": {
+      "post": {
+        "tags": ["Connection"], "summary": "Register scanner details", "operationId": "registerDevice", "security": [],
+        "description": "The scanner may omit Content-Type; nx-boss treats scanner JSON requests as JSON. Registration updates the last observed scanner identity.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeviceRegistration" } } } },
+        "responses": { "200": { "description": "Server version and time", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeviceResponse" } } } }, "422": { "$ref": "#/components/responses/InvalidRequest" } }
+      }
+    },
+    "/NmWebService/authorization": {
+      "get": {
+        "tags": ["Authentication"], "summary": "Negotiate scanner login mode", "operationId": "authorizationMode", "security": [],
+        "description": "Returns none or userpass, according to the live configuration. userpass requires the HTTPS scanner listener.",
+        "parameters": [{ "name": "auth_token", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Optional scanner token; currently ignored" }],
+        "responses": { "200": { "description": "Mode and empty negotiation token", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthMode" } } } }, "403": { "$ref": "#/components/responses/InsecureTransport" } }
+      },
+      "post": {
+        "tags": ["Authentication"], "summary": "Log in and fetch ordered jobs", "operationId": "scannerLogin", "security": [],
+        "description": "In userpass mode, send the username and password as top-level JSON strings auth_info_user and auth_info_pass over HTTPS. The physical fi-7300NX was observed sending these fields; no HTTP Basic header was observed. In none mode the body may be an empty object and access_token is the placeholder unused. The request is limited to 16 KiB. Never put credentials in query strings.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ScannerLogin" } } } },
+        "responses": {
+          "200": { "description": "Bearer token and jobs", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LoginResponse" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/InsecureTransport" },
+          "413": { "$ref": "#/components/responses/TooLarge" },
+          "429": { "description": "Login capacity exhausted" }
+        }
+      }
+    },
+    "/NmWebService/scansetting": {
+      "get": {
+        "tags": ["Scanning"], "summary": "Get settings for a job", "operationId": "scanSetting", "security": [{ "scannerBearer": [] }],
+        "description": "Bearer is required in userpass mode; none mode accepts this route without it.",
+        "parameters": [{ "name": "job_id", "in": "query", "required": true, "schema": { "type": "integer", "minimum": 0 } }],
+        "responses": { "200": { "description": "NX scanner settings (vendor-shaped JSON)", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } } }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/InsecureTransport" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/NmWebService/batch": {
+      "post": {
+        "tags": ["Scanning"], "summary": "Create scan batch", "operationId": "createBatch", "security": [{ "scannerBearer": [] }],
+        "description": "job_id accepts a nonnegative integer or its decimal string form. Creation persists batch metadata before returning.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateBatch" } } } },
+        "responses": { "200": { "description": "New batch identifier", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BatchCreated" } } } }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/InsecureTransport" }, "422": { "$ref": "#/components/responses/InvalidRequest" }, "500": { "$ref": "#/components/responses/ServerError" } }
+      }
+    },
+    "/NmWebService/batch/{batch_id}": {
+      "put": {
+        "tags": ["Scanning"], "summary": "Complete batch and assemble PDF", "operationId": "completeBatch", "security": [{ "scannerBearer": [] }],
+        "description": "Completes the local batch. Paperless delivery continues asynchronously when configured; HTTP 200 does not confirm a Paperless import.",
+        "parameters": [{ "name": "batch_id", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[0-9a-f]{32}$" } }],
+        "responses": { "200": { "description": "Local completion succeeded; empty body" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/InsecureTransport" }, "404": { "$ref": "#/components/responses/NotFound" }, "503": { "description": "PDF worker capacity exhausted" }, "500": { "$ref": "#/components/responses/ServerError" } }
+      }
+    },
+    "/NmWebService/image": {
+      "post": {
+        "tags": ["Scanning"], "summary": "Upload one JPEG page", "operationId": "uploadImage", "security": [{ "scannerBearer": [] }],
+        "description": "Accepts multipart/form-data and scanner multipart/* variants with a boundary. parameter is a JSON part containing batch_id. Optional imageparameter is accepted but currently ignored. Per-request body limit is 34 MiB; page and batch quotas may be lower.",
+        "requestBody": { "required": true, "content": { "multipart/form-data": { "schema": { "type": "object", "required": ["image", "parameter"], "properties": { "image": { "type": "string", "format": "binary", "description": "JPEG page with filename" }, "parameter": { "type": "object", "required": ["batch_id"], "properties": { "batch_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" }, "page": { "type": "integer", "minimum": 1 } }, "additionalProperties": true, "description": "Serialized as a JSON multipart part" }, "imageparameter": { "type": "string", "description": "Optional scanner-specific field; ignored" } } }, "encoding": { "image": { "contentType": "image/jpeg" }, "parameter": { "contentType": "application/json" } } } } },
+        "responses": { "200": { "description": "Page persisted; empty body" }, "400": { "$ref": "#/components/responses/InvalidRequest" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/InsecureTransport" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "description": "Batch state rejects the upload" }, "413": { "$ref": "#/components/responses/TooLarge" }, "503": { "description": "Upload worker capacity exhausted" }, "500": { "$ref": "#/components/responses/ServerError" } }
+      }
+    },
+    "/NmWebService/accesstoken": {
+      "delete": {
+        "tags": ["Authentication"], "summary": "Log out scanner session", "operationId": "scannerLogout", "security": [{ "scannerBearer": [] }],
+        "description": "Revokes the supplied bearer token in userpass mode. In none mode no live session is required.",
+        "responses": { "200": { "description": "Compatibility response", "content": { "application/json": { "schema": { "type": "object", "properties": { "CharSet": { "type": "null" }, "Parameters": { "type": "array", "items": {} }, "MediaType": { "type": "string" } } } } } }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/InsecureTransport" } }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": { "scannerBearer": { "type": "http", "scheme": "bearer", "description": "Token returned by POST /NmWebService/authorization in userpass mode. Never log or persist it." } },
+    "responses": {
+      "Unauthorized": { "description": "Missing, expired or invalid scanner session; or failed login" },
+      "InsecureTransport": { "description": "HTTPS required in userpass mode" },
+      "InvalidRequest": { "description": "Malformed or unsupported request" },
+      "NotFound": { "description": "Unknown job or batch" },
+      "TooLarge": { "description": "Request or upload limit exceeded" },
+      "ServerError": { "description": "Internal operation failed; inspect redacted server events" }
+    },
+    "schemas": {
+      "SystemTime": { "type": "object", "required": ["system_time"], "properties": { "system_time": { "type": "string", "format": "date-time" } } },
+      "DeviceRegistration": { "type": "object", "required": ["call_timing", "scanner_ip", "scanner_mac", "scanner_model", "scanner_name", "scanner_port", "scanner_protocol", "serial_no"], "properties": { "call_timing": { "type": "string" }, "scanner_ip": { "type": "string" }, "scanner_mac": { "type": "string" }, "scanner_model": { "type": "string" }, "scanner_name": { "type": "string" }, "scanner_port": { "type": "string" }, "scanner_protocol": { "type": "string" }, "serial_no": { "type": "string" } }, "additionalProperties": true },
+      "DeviceResponse": { "type": "object", "required": ["system_time", "server_version"], "properties": { "system_time": { "type": "string", "format": "date-time" }, "server_version": { "type": "string", "example": "2.6.0.4" } } },
+      "AuthMode": { "type": "object", "required": ["auth_type", "auth_token"], "properties": { "auth_type": { "type": "string", "enum": ["none", "userpass"] }, "auth_token": { "type": "string", "example": "" } } },
+      "ScannerLogin": { "type": "object", "properties": { "auth_info_user": { "type": "string", "writeOnly": true, "description": "Required in userpass mode" }, "auth_info_pass": { "type": "string", "format": "password", "writeOnly": true, "description": "Required in userpass mode" }, "scanner_info": { "type": "object", "additionalProperties": true, "description": "Optional device metadata" } }, "additionalProperties": true },
+      "LoginResponse": { "type": "object", "required": ["access_token", "token_type", "job_group_name", "job_info"], "properties": { "access_token": { "type": "string", "readOnly": true }, "token_type": { "type": "string", "const": "bearer" }, "job_group_name": { "type": "string" }, "job_info": { "type": "array", "items": { "type": "object", "required": ["job_id", "name"], "properties": { "job_id": { "type": "integer" }, "name": { "type": "string" }, "color": { "type": "string" } }, "additionalProperties": true } } } },
+      "CreateBatch": { "type": "object", "required": ["job_id"], "properties": { "job_id": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "string", "pattern": "^[0-9]+$" }] } }, "additionalProperties": true },
+      "BatchCreated": { "type": "object", "required": ["batch_id"], "properties": { "batch_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" } } }
+    }
+  }
+}

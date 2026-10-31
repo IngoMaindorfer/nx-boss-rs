@@ -9,11 +9,26 @@
   <table style="max-width:500px">
     <tr><th>Batch-ID</th><td style="font-family:monospace;font-size:.85rem">{{ batch_id }}</td></tr>
     <tr><th>Job</th><td>{{ job_name }}</td></tr>
-    <tr><th>{{ t.lbl_created }}</th><td>{{ created_at }}</td></tr>
+    <tr><th>{{ t.lbl_created }}</th><td><time datetime="{{ created_at }}">{{ created_at }}</time></td></tr>
     <tr><th>{{ t.col_pages }}</th><td>{{ files.len() }}</td></tr>
     <tr><th>{{ t.col_status }}</th><td>{% if completed %}{{ t.status_completed }}{% else %}{{ t.status_open }}{% endif %}</td></tr>
+    {% if let Some(status) = paperless_status %}
+    <tr><th>Paperless</th><td>{{ status }}</td></tr>
+    {% endif %}
+    {% if let Some(error) = paperless_error %}
+    <tr><th>Paperless {{ t.paperless_failed }}</th><td>{{ error }}</td></tr>
+    {% endif %}
+    {% if let Some(task_id) = paperless_task_id %}
+    <tr><th>{{ t.paperless_task_id }}</th><td style="font-family:monospace;font-size:.85rem">{{ task_id }}</td></tr>
+    {% endif %}
+    {% if let Some(attempts) = paperless_attempts %}
+    <tr><th>{{ t.paperless_attempts }}</th><td>{{ attempts }}</td></tr>
+    {% endif %}
+    {% if let Some(last_attempt) = paperless_last_attempt %}
+    <tr><th>{{ t.paperless_last_attempt }}</th><td><time datetime="{{ last_attempt }}">{{ last_attempt }}</time></td></tr>
+    {% endif %}
     <tr><th>{{ t.col_resolution }}</th><td>{{ resolution }} DPI</td></tr>
-    <tr><th>{{ t.field_pixel_format }}</th><td>{{ pixel_format }}</td></tr>
+    <tr><th>{{ t.field_pixel_format }}</th><td>{{ t.pixel_format_label(pixel_format) }}</td></tr>
     <tr><th>{{ t.field_jpeg_quality }}</th><td>{{ jpeg_quality }}</td></tr>
     <tr><th>{{ t.field_source }}</th><td>{% if source == "feeder" %}{{ t.source_duplex }}{% else if source == "feederFront" %}{{ t.source_front }}{% else %}{{ t.source_rear }}{% endif %}</td></tr>
     {% if let Some(model) = scanner_model %}
@@ -25,6 +40,10 @@
   </table>
 </div>
 
+{% if paperless_attention %}
+<div class="card" role="alert"><strong>{{ t.paperless_attention }}</strong><p>{{ t.paperless_reconcile_hint }}</p></div>
+{% endif %}
+
 {% if !files.is_empty() %}
 <div class="card">
   <h3>{{ t.col_pages }}</h3>
@@ -35,7 +54,7 @@
         <img src="/scans/{{ batch_id }}/files/{{ filename }}"
              class="thumbnail" alt="{{ filename }}">
       </a>
-      <div style="font-size:.75rem;color:#6c757d;margin-top:.25rem">{{ filename }}</div>
+      <div class="muted" style="font-size:.75rem;margin-top:.25rem">{{ filename }}</div>
     </div>
     {% endfor %}
   </div>

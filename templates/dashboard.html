@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-header">
-  <h2>Dashboard</h2>
+  <h2>{{ t.nav_dashboard }}</h2>
   <div id="scanner-status"
        hx-get="/api/scanner-status"
        hx-trigger="load, every 10s"
@@ -10,11 +10,37 @@
   </div>
 </div>
 
+{% if paperless_attention_count > 0 %}
+<div class="card" role="alert">
+  <a href="/scans">{{ t.paperless_attention_count }}: {{ paperless_attention_count }}</a>
+</div>
+{% endif %}
+
 <div class="stat-grid">
   <div class="stat">
-    <div class="stat-value">{{ recent_scans.len() }}</div>
-    <div class="stat-label">{{ t.dash_recent_scans }}</div>
+    <div class="stat-value">{{ stats.documents }}</div>
+    <div class="stat-label">{{ t.dash_documents }}</div>
   </div>
+  <div class="stat">
+    <div class="stat-value">{{ stats.pages }}</div>
+    <div class="stat-label">{{ t.dash_pages }}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">{{ stats.paperless_imported }}</div>
+    <div class="stat-label">{{ t.dash_imported }}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">{{ stats.needs_attention }}</div>
+    <div class="stat-label">{{ t.dash_needs_attention }}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">{{ stats.open_batches }}</div>
+    <div class="stat-label">{{ t.dash_open_batches }}</div>
+  </div>
+  <a class="stat stat-link" href="/events">
+    <div class="stat-value">{{ recent_error_count }}</div>
+    <div class="stat-label">{{ t.events_recent_errors }}</div>
+  </a>
   <div class="stat">
     <div class="stat-value">{{ jobs.len() }}</div>
     <div class="stat-label">{{ t.nav_jobs }}</div>
@@ -36,6 +62,7 @@
   </div>
   {% endif %}
 </div>
+<p class="muted stats-scope">{{ t.dash_stats_scope }}</p>
 
 <div class="card">
   <h3>{{ t.nav_jobs }}</h3>
@@ -47,7 +74,7 @@
     <li>
       <span class="color-dot" style="background:{{ job.color }}"></span>
       <a href="/jobs/{{ job.id }}/edit">{{ job.name }}</a>
-      <span style="color:#999;font-size:.8rem">{{ job.resolution }} DPI &middot; {{ job.pixel_format }} &middot; {% if job.source == "feeder" %}{{ t.source_duplex }}{% else if job.source == "feederFront" %}{{ t.source_front }}{% else if job.source == "feederRear" %}{{ t.source_rear }}{% else %}{{ t.source_simplex }}{% endif %}</span>
+      <span class="muted" style="font-size:.8rem">{{ job.resolution }} DPI &middot; {{ t.pixel_format_label(job.pixel_format) }} &middot; {% if job.source == "feeder" %}{{ t.source_duplex }}{% else if job.source == "feederFront" %}{{ t.source_front }}{% else if job.source == "feederRear" %}{{ t.source_rear }}{% else %}{{ t.source_simplex }}{% endif %}</span>
     </li>
     {% endfor %}
   </ul>
@@ -76,15 +103,15 @@
     </thead>
     <tbody>
       {% for scan in recent_scans %}
-      <tr>
-        <td>{{ scan.created_at }}</td>
+      <tr class="scan-row" data-scan-href="/scans/{{ scan.batch_id }}" tabindex="0" aria-label="{{ t.btn_details }}: {{ scan.job_name }}">
+        <td><time datetime="{{ scan.created_at }}">{{ scan.created_at }}</time></td>
         <td>{{ scan.job_name }}</td>
         <td>{{ scan.page_count }}</td>
         <td>{{ scan.resolution }}</td>
-        <td>{{ scan.pixel_format }}</td>
+        <td>{{ t.pixel_format_label(scan.pixel_format) }}</td>
         <td>{% if scan.source == "feeder" %}{{ t.source_duplex }}{% else if scan.source == "feederFront" %}{{ t.source_front }}{% else if scan.source == "feederRear" %}{{ t.source_rear }}{% else %}{{ t.source_simplex }}{% endif %}</td>
         <td>{% if let Some(m) = scan.scanner_model %}{{ m }}{% else %}—{% endif %}</td>
-        <td>{% if scan.completed %}{{ t.status_completed }}{% else %}{{ t.status_open }}{% endif %}</td>
+        <td>{% if scan.completed %}{{ t.status_completed }}{% else %}{{ t.status_open }}{% endif %}{% if let Some(status) = scan.paperless_status %}<br>Paperless: {{ status }}{% endif %}</td>
         <td><a href="/scans/{{ scan.batch_id }}" class="btn btn-sm btn-secondary">{{ t.btn_details }}</a></td>
       </tr>
       {% endfor %}

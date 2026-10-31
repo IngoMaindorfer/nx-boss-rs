@@ -1,29 +1,56 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="{{ t.code }}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>nx-boss-rs</title>
-  <script src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js"></script>
+  <script src="/static/htmx.min.js"></script>
+  <script src="/static/ui-preferences.js"></script>
+  <script src="/static/scan-rows.js" defer></script>
+  <script src="/static/job-rows.js" defer></script>
   <style>
+    :root { color-scheme: light; --page:#f0f2f5; --surface:#fff; --text:#212529; --heading:#1a237e; --muted:#6c757d; --border:#dee2e6; --line:#f0f2f5; --row-hover:#eef2ff; --field:#fff; --nav:#1a237e; --link:#1a237e; --success-bg:#e8f5e9; --success-text:#2e7d32; --error-bg:#fce4ec; --error-text:#b71c1c; }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) { color-scheme: dark; --page:#111827; --surface:#1f2937; --text:#e5e7eb; --heading:#b9c6ff; --muted:#a9b4c4; --border:#4b5563; --line:#374151; --row-hover:#303d59; --field:#111827; --nav:#141c49; --link:#bdc8ff; --success-bg:#183c2c; --success-text:#a8e9ba; --error-bg:#4a202b; --error-text:#ffbac8; }
+    }
+    :root[data-theme="dark"] { color-scheme: dark; --page:#111827; --surface:#1f2937; --text:#e5e7eb; --heading:#b9c6ff; --muted:#a9b4c4; --border:#4b5563; --line:#374151; --row-hover:#303d59; --field:#111827; --nav:#141c49; --link:#bdc8ff; --success-bg:#183c2c; --success-text:#a8e9ba; --error-bg:#4a202b; --error-text:#ffbac8; }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, -apple-system, sans-serif; display: flex; min-height: 100vh; background: #f0f2f5; color: #212529; }
-    nav { width: 220px; min-height: 100vh; background: #1a237e; color: #fff; padding: 1.5rem 1rem; display: flex; flex-direction: column; gap: .25rem; flex-shrink: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; display: flex; min-height: 100vh; background: var(--page); color: var(--text); }
+    nav { width: 220px; min-height: 100vh; background: var(--nav); color: #fff; padding: 1.5rem 1rem; display: flex; flex-direction: column; gap: .25rem; flex-shrink: 0; }
     nav .logo { font-size: 1.1rem; font-weight: 700; padding: .5rem .75rem; margin-bottom: 1rem; letter-spacing: .04em; }
     nav a { display: block; padding: .5rem .75rem; color: rgba(255,255,255,.75); text-decoration: none; border-radius: 6px; font-size: .9rem; }
     nav a:hover, nav a.active { background: rgba(255,255,255,.15); color: #fff; }
-    .nav-footer { margin-top: auto; padding-top: 1rem; font-size: .72rem; color: rgba(255,255,255,.4); line-height: 1.6; }
+    .nav-preferences { margin-top: auto; display: grid; gap: .5rem; padding-top: 1rem; }
+    .nav-preferences label { color: rgba(255,255,255,.8); }
+    .nav-preferences select { width: 100%; }
+    .nav-footer { padding-top: 1rem; font-size: .72rem; color: rgba(255,255,255,.6); line-height: 1.6; }
     .nav-footer a { color: rgba(255,255,255,.5); text-decoration: none; }
     .nav-footer a:hover { color: rgba(255,255,255,.8); }
     main { flex: 1; padding: 2rem; min-width: 0; }
-    h2 { font-size: 1.4rem; font-weight: 600; margin-bottom: 1.5rem; color: #1a237e; }
+    h2 { font-size: 1.4rem; font-weight: 600; margin-bottom: 1.5rem; color: var(--heading); }
     h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 1rem; }
-    .card { background: #fff; border-radius: 10px; padding: 1.5rem; margin-bottom: 1.25rem; box-shadow: 0 1px 4px rgba(0,0,0,.08); overflow: hidden; }
+    .card { background: var(--surface); border-radius: 10px; padding: 1.5rem; margin-bottom: 1.25rem; box-shadow: 0 1px 4px rgba(0,0,0,.08); overflow: hidden; }
     .table-wrap { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; }
-    th { text-align: left; padding: .6rem 1rem; font-size: .78rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: #6c757d; border-bottom: 2px solid #dee2e6; }
-    td { padding: .75rem 1rem; border-bottom: 1px solid #f0f2f5; font-size: .9rem; vertical-align: middle; }
+    th { text-align: left; padding: .6rem 1rem; font-size: .78rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); border-bottom: 2px solid var(--border); }
+    td { padding: .75rem 1rem; border-bottom: 1px solid var(--line); font-size: .9rem; vertical-align: middle; }
     tr:last-child td { border-bottom: none; }
+    tr.scan-row { cursor: pointer; }
+    tr.scan-row:hover, tr.scan-row:focus-visible { background: var(--row-hover); }
+    tr.scan-row:focus-visible { outline: 2px solid var(--heading); outline-offset: -2px; }
+    tr.job-row { cursor: pointer; }
+    tr.job-row:hover, tr.job-row:focus-visible { background: var(--row-hover); }
+    tr.job-row:focus-visible { outline: 2px solid var(--heading); outline-offset: -2px; }
+    tr.job-row.is-dragging { opacity: .45; }
+    tr.job-row.drag-before td { border-top: 2px solid var(--heading); }
+    tr.job-row.drag-after td { border-bottom: 2px solid var(--heading); }
+    .job-drag-col { width: 3rem; padding-right: 0; }
+    .drag-handle { border: 0; background: transparent; color: var(--muted); cursor: grab; font-size: 1.1rem; line-height: 1; padding: .25rem; touch-action: none; }
+    .drag-handle:active { cursor: grabbing; }
+    .drag-handle:focus-visible { outline: 2px solid var(--heading); border-radius: 4px; }
+    .job-order-help { font-size: .82rem; margin-bottom: .75rem; }
+    .job-order-status { color: var(--muted); font-size: .82rem; margin-bottom: .5rem; }
+    .job-order-status:empty { display: none; }
     .btn { display: inline-block; padding: .4rem .9rem; border-radius: 6px; border: none; cursor: pointer; font-size: .875rem; font-weight: 500; text-decoration: none; transition: opacity .15s; }
     .btn:hover { opacity: .85; }
     .btn-primary { background: #1a237e; color: #fff; }
@@ -32,34 +59,57 @@
     .btn-sm { padding: .25rem .6rem; font-size: .8rem; }
     .badge { display: inline-flex; align-items: center; gap: .3rem; padding: .2rem .6rem; border-radius: 20px; font-size: .78rem; font-weight: 600; }
     .badge::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; }
-    .badge-online  { background: #e8f5e9; color: #2e7d32; } .badge-online::before  { background: #2e7d32; }
-    .badge-offline { background: #fce4ec; color: #c62828; } .badge-offline::before { background: #c62828; }
+    .badge-online  { background: var(--success-bg); color: var(--success-text); } .badge-online::before  { background: var(--success-text); }
+    .badge-offline { background: var(--error-bg); color: var(--error-text); } .badge-offline::before { background: var(--error-text); }
     .color-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; vertical-align: middle; margin-right: .4rem; border: 1px solid rgba(0,0,0,.15); }
     form.edit-form { display: grid; gap: 1rem; max-width: 540px; }
     .field { display: grid; gap: .3rem; }
-    label { font-size: .85rem; font-weight: 500; color: #495057; }
-    input[type=text], input[type=number], select { padding: .45rem .75rem; border: 1px solid #ced4da; border-radius: 6px; font-size: .9rem; width: 100%; }
+    label { font-size: .85rem; font-weight: 500; color: var(--muted); }
+    input[type=text], input[type=number], select, textarea { padding: .45rem .75rem; border: 1px solid var(--border); border-radius: 6px; font-size: .9rem; width: 100%; background: var(--field); color: var(--text); }
     input[type=color] { padding: .2rem .4rem; height: 2.2rem; border: 1px solid #ced4da; border-radius: 6px; cursor: pointer; }
     input:focus, select:focus { outline: 2px solid #1a237e; outline-offset: 1px; border-color: transparent; }
     .form-actions { display: flex; gap: .75rem; margin-top: .5rem; }
-    .alert-error { background: #fce4ec; color: #b71c1c; padding: .75rem 1rem; border-radius: 6px; font-size: .875rem; margin-bottom: 1rem; }
-    .empty { color: #6c757d; font-size: .9rem; padding: 1rem 0; }
+    .alert-error { background: var(--error-bg); color: var(--error-text); padding: .75rem 1rem; border-radius: 6px; font-size: .875rem; margin-bottom: 1rem; }
+    .empty { color: var(--muted); font-size: .9rem; padding: 1rem 0; }
     .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
     .page-header h2 { margin-bottom: 0; }
     .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
-    .stat { background: #fff; border-radius: 10px; padding: 1.25rem 1.5rem; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
-    .stat-value { font-size: 2rem; font-weight: 700; color: #1a237e; line-height: 1; }
-    .stat-label { font-size: .8rem; color: #6c757d; margin-top: .25rem; }
-    .thumbnail { width: 60px; height: 60px; object-fit: cover; border-radius: 4px; border: 1px solid #dee2e6; }
+    .stat { background: var(--surface); border-radius: 10px; padding: 1.25rem 1.5rem; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+    .stat-value { font-size: 2rem; font-weight: 700; color: var(--heading); line-height: 1; }
+    .stat-label { font-size: .8rem; color: var(--muted); margin-top: .25rem; }
+    .stat-link { display: block; text-decoration: none; }
+    .stat-link:hover { outline: 2px solid var(--heading); }
+    .stats-scope { font-size: .82rem; margin: -.5rem 0 1.25rem; }
+    .thumbnail { width: 60px; height: 60px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border); }
+    a { color: var(--link); }
+    .nav-footer a, nav a { color: rgba(255,255,255,.8); }
+    .muted { color: var(--muted); }
+    .alert-success { background: var(--success-bg); color: var(--success-text); padding: .75rem 1rem; border-radius: 6px; font-size: .875rem; margin-bottom: 1rem; }
+    @media (max-width: 740px) { body { display: block; } nav { width: auto; min-height: auto; } main { padding: 1rem; } }
   </style>
 </head>
 <body>
   <nav>
     <div class="logo">nx-boss-rs</div>
-    <a href="/">Dashboard</a>
+    <a href="/">{{ t.nav_dashboard }}</a>
     <a href="/jobs">{{ t.nav_jobs }}</a>
-    <a href="/scans">Scans</a>
+    <a href="/scans">{{ t.nav_scans }}</a>
+    <a href="/events">{{ t.nav_events }}</a>
+    <a href="/api-docs">{{ t.nav_api_docs }}</a>
     <a href="/settings">{{ t.nav_settings }}</a>
+    <div class="nav-preferences">
+      <label for="ui-language">{{ t.language_label }}</label>
+      <select id="ui-language" aria-label="{{ t.language_label }}">
+        <option value="de" {% if t.code == "de" %}selected{% endif %}>Deutsch</option>
+        <option value="en" {% if t.code == "en" %}selected{% endif %}>English</option>
+      </select>
+      <label for="ui-theme">{{ t.theme_label }}</label>
+      <select id="ui-theme" aria-label="{{ t.theme_label }}">
+        <option value="auto">{{ t.theme_auto }}</option>
+        <option value="light">{{ t.theme_light }}</option>
+        <option value="dark">{{ t.theme_dark }}</option>
+      </select>
+    </div>
     <div class="nav-footer">
       <div>v{{ build.version }} &middot; <a href="{{ build.commit_url() }}" target="_blank" rel="noopener">{{ build.short_sha() }}</a></div>
       <div><a href="{{ build.repository }}" target="_blank" rel="noopener">GitHub</a></div>

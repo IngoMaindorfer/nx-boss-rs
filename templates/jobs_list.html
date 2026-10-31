@@ -9,26 +9,36 @@
   {% if jobs.is_empty() %}
     <p class="empty">{{ t.no_jobs }}</p>
   {% else %}
-  <table>
+  <p class="muted job-order-help" id="job-order-help">{{ t.jobs_reorder_help }}</p>
+  <p id="job-order-status" class="job-order-status" role="status" aria-live="polite"></p>
+  <table id="jobs-table"
+         data-reorder-saved="{{ t.jobs_reorder_saved }}"
+         data-reorder-failed="{{ t.jobs_reorder_failed }}"
+         data-reorder-conflict="{{ t.jobs_reorder_conflict }}">
     <thead>
       <tr>
+        <th class="job-drag-col" aria-label="{{ t.jobs_reorder_handle }}"></th>
         <th>Name</th>
         <th>{{ t.col_resolution }}</th>
         <th>{{ t.col_pixel_format }}</th>
-        <th>{{ t.col_output_path }}</th>
         <th></th>
       </tr>
     </thead>
     <tbody>
       {% for job in jobs %}
-      <tr>
-        <td>
+      <tr class="job-row" data-job-id="{{ job.id }}" data-job-href="/jobs/{{ job.id }}/edit"
+          tabindex="0" aria-label="{{ job.name }}: {{ t.btn_edit }}">
+        <td class="job-drag-col">
+          <button type="button" class="drag-handle" draggable="true"
+                  aria-label="{{ t.jobs_reorder_handle }}: {{ job.name }}"
+                  aria-describedby="job-order-help" aria-keyshortcuts="ArrowUp ArrowDown">⋮⋮</button>
+        </td>
+        <td class="job-name">
           <span class="color-dot" style="background:{{ job.color }}"></span>
           {{ job.name }}
         </td>
         <td>{{ job.resolution }} DPI</td>
-        <td>{% if job.pixel_format == "rgb24" %}{{ t.pf_rgb }}{% else %}{{ t.pf_gray }}{% endif %}</td>
-        <td style="font-size:.8rem;color:#6c757d">{{ job.output_path }}</td>
+        <td>{{ t.pixel_format_label(job.pixel_format) }}</td>
         <td style="white-space:nowrap">
           <a href="/jobs/{{ job.id }}/edit" class="btn btn-sm btn-secondary">{{ t.btn_edit }}</a>
           <button class="btn btn-sm btn-danger"
