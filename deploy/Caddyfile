@@ -1,0 +1,31 @@
+{
+	admin off
+	auto_https disable_redirects
+	default_sni {$NX_BOSS_ADMIN_DOMAIN:nx.maindorfer.name}
+}
+
+https://{$NX_BOSS_ADMIN_DOMAIN:nx.maindorfer.name}:{$NX_BOSS_ADMIN_HTTPS_PORT} {
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+		resolvers 1.1.1.1
+	}
+	reverse_proxy nx-boss-rs:{$NX_BOSS_UPSTREAM_ADMIN_PORT} {
+		header_up X-Forwarded-Proto https
+	}
+}
+
+http://:{$NX_BOSS_SCANNER_HTTP_PORT} {
+	reverse_proxy nx-boss-rs:{$NX_BOSS_UPSTREAM_SCANNER_PORT} {
+		header_up X-Forwarded-Proto http
+	}
+}
+
+https://{$NX_BOSS_ADMIN_DOMAIN:nx.maindorfer.name}:{$NX_BOSS_SCANNER_HTTPS_PORT} {
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+		resolvers 1.1.1.1
+	}
+	reverse_proxy nx-boss-rs:{$NX_BOSS_UPSTREAM_SCANNER_PORT} {
+		header_up X-Forwarded-Proto https
+	}
+}
