@@ -1,6 +1,6 @@
 # Security review and next steps
 
-Status: 2026-10-01. This records code changes and decisions for the scanner and Paperless deployment. A green automated test suite does not establish compatibility with a physical scanner or an authenticated Paperless instance.
+Status: 2026-10-31 (review implementation, deployment pending). This records code changes and decisions for the scanner and Paperless deployment. A green automated test suite does not establish compatibility with a physical scanner or an authenticated Paperless instance.
 
 ## Findings addressed with regression tests
 
@@ -11,15 +11,15 @@ Status: 2026-10-01. This records code changes and decisions for the scanner and 
 | Batch lifecycle | Completion marked before output was delivered; concurrent requests raced | Serialize operations per batch, write delivery files through temporary paths, mark complete last, recover open batches after restart. |
 | Job/config changes | Job IDs shifted; advanced settings disappeared; failed save published state | Stable IDs, preserve raw settings, atomically replace config, publish state only after persistence, block deletion or path changes while work is pending. |
 | Scan UI | Any file under a batch directory could be served as JPEG | Serve only filenames listed in batch metadata; reject symlink page files. |
-| Browser/admin | Shared listener, unauthenticated access, cross-origin writes, DNS rebinding | Separate admin port; passkey setup and sign-in for new installs; private sessions; matching HTTPS Origin; allowed Host headers; local scripts and browser security headers. Existing password/TOTP accounts remain supported. |
+| Browser/admin | Shared listener, unauthenticated access, cross-origin writes, DNS rebinding | Separate admin port; passkey setup and sign-in for new installs; private sessions; matching HTTPS Origin; allowed Host headers; local scripts and browser security headers. Only passkeys are accepted; an obsolete admin-auth.json stops startup. |
 | Scanner credentials | Private plaintext file and unlimited async hash work | Argon2id hash with random salt and separate pepper, bounded blocking verification, mode-change session revocation; legacy file retained only for rollback. |
 | Paperless configuration | Token in process environment and target changes during uncertain delivery | Private replaceable token file, live client swap, target-change guard while scans or imports are pending. |
 | Paperless retention | Pending import might be archived or deleted | Retain a Paperless batch until a document ID is confirmed. |
 | Retention archive | A failed compression left a published partial archive | Build in a temporary file, sync it, and publish by rename only after compression succeeds. |
-| PDF dependency | `lopdf 0.42` pulled in unmaintained `ttf-parser` although nx-boss embeds no fonts | Upgrade to `lopdf 0.45` with default features disabled; font parsing is absent from the lockfile. |
+| PDF dependency | `lopdf 0.42` pulled in unmaintained `ttf-parser` although nx-boss embeds no fonts | Upgrade to `lopdf 0.46` with default features disabled; font parsing is absent from the lockfile. |
 | Resource exhaustion | Large/many simultaneous uploads | Two upload slots, one PDF assembly slot, page/batch/request limits. |
 
-The admin UI now supports one local passkey account for new installations. The one-time setup code lives only in the private config volume. Sessions use Secure/HttpOnly/SameSite cookies; writes require a matching HTTPS Origin and sensitive settings require a fresh passkey assertion. Previously enrolled password/TOTP accounts remain usable. Scanner `userpass` verifies a salted, peppered Argon2id hash and issues a bearer over HTTPS. Scanner `none` remains available and unauthenticated. The default host Compose bindings are loopback; the VM publishes only Caddy on its trusted LAN IP. Caddy obtains and renews a publicly trusted certificate with Cloudflare DNS-01. Do not expose either listener to an untrusted network.
+The admin UI now supports one local passkey account for new installations. The one-time setup code lives only in the private config volume. Sessions use Secure/HttpOnly/SameSite cookies; writes require a matching HTTPS Origin and sensitive settings require a fresh passkey assertion. An existing admin-auth.json is rejected explicitly; it is never ignored. Scanner `userpass` verifies a salted, peppered Argon2id hash and issues a bearer over HTTPS. Scanner `none` remains available and unauthenticated. The default host Compose bindings are loopback; the VM publishes only Caddy on its trusted LAN IP. Caddy obtains and renews a publicly trusted certificate with Cloudflare DNS-01. Do not expose either listener to an untrusted network.
 
 ## Scanner deployment and protocol validation
 
@@ -63,3 +63,12 @@ Do not configure both `consume_path` and the API for the same job unless duplica
 ## TDD sequence for further work
 
 For each change, add a failing test that demonstrates the observed risk, make the smallest implementation change, run the targeted test, then run the full suite and lint. Prioritize: scanner protocol mismatches found with the physical device; operator reconciliation for ambiguous Paperless uploads; resource usage under the maximum batch; descriptor-safe file access; non-root container operation; physical scanner and Paperless staging tests.
+
+
+The 31 October review implementation adds independent bounded login/confirmation
+pools, per-client login-start limits, named removable passkeys with session
+revocation, private/no-store admin responses, same-origin-only form destinations,
+and HSTS on Caddy TLS listeners. Tests now exercise the separate production
+routers. Recovery actions require fresh one-use passkey confirmation. See the
+[review answers](review-2026-10-31.md) for per-finding tests and commits and the
+[deployment handoff](deployment-review-2026-10-31.md) for operator-only checks.

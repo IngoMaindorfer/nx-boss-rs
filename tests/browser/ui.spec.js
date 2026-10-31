@@ -1,6 +1,23 @@
 const { test, expect } = require('@playwright/test');
-const crypto = require('node:crypto');
 const fs = require('node:fs');
+
+let virtualClient;
+let virtualAuthenticator;
+test.beforeEach(async ({ page, context }) => {
+  virtualClient = await context.newCDPSession(page);
+  await virtualClient.send('WebAuthn.enable');
+  ({ authenticatorId: virtualAuthenticator } = await virtualClient.send('WebAuthn.addVirtualAuthenticator', { options: {
+    protocol: 'ctap2', transport: 'internal', hasResidentKey: true,
+    hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true,
+  } }));
+  for (const credential of JSON.parse(fs.readFileSync('/tmp/nx-boss-browser-passkey.json', 'utf8'))) {
+    await virtualClient.send('WebAuthn.addCredential', { authenticatorId: virtualAuthenticator, credential });
+  }
+});
+test.afterEach(async () => {
+  const result = await virtualClient.send('WebAuthn.getCredentials', { authenticatorId: virtualAuthenticator });
+  fs.writeFileSync('/tmp/nx-boss-browser-passkey.json', JSON.stringify(result.credentials), { mode: 0o600 });
+});
 
 async function waitForSeededScan(page, path) {
   await page.goto(path);
@@ -165,7 +182,7 @@ test('admin pages reject missing sessions and cross-origin writes', async ({ bro
   await anonymous.close();
   const response = await page.request.post('/settings/scanner', {
     headers: { origin: 'https://attacker.invalid' },
-    form: { mode: 'none', username: '', new_password: '', admin_password: '', admin_code: '' },
+    form: { mode: 'none', username: '', new_password: '' },
     failOnStatusCode: false,
   });
   expect(response.status()).toBe(403);
@@ -190,28 +207,10 @@ test('login page honors the saved light and dark choices', async ({ browser }) =
 });
 
 test('scanner password mode can be enabled in the UI and authenticates', async ({ page, request }) => {
-  const fixture = JSON.parse(fs.readFileSync('/tmp/nx-boss-browser-totp.json', 'utf8'));
-  // Node Buffer has no base32 decoder, so decode the RFC 4648 alphabet locally.
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-  let bits = '';
-  for (const char of fixture.secret) bits += alphabet.indexOf(char).toString(2).padStart(5, '0');
-  const key = Buffer.from(bits.match(/.{8}/g).map((chunk) => parseInt(chunk, 2)));
-  let counter = Math.floor(Date.now() / 30000);
-  while (counter <= fixture.used_counter) {
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    counter = Math.floor(Date.now() / 30000);
-  }
-  const message = Buffer.alloc(8);
-  message.writeBigUInt64BE(BigInt(counter));
-  const digest = crypto.createHmac('sha1', key).update(message).digest();
-  const offset = digest[19] & 15;
-  const code = String((digest.readUInt32BE(offset) & 0x7fffffff) % 1000000).padStart(6, '0');
   await page.goto('/settings/scanner');
   await page.locator('[name=mode]').selectOption('userpass');
   await page.locator('[name=username]').fill('browser-scanner');
   await page.locator('[name=new_password]').fill('browser-test-scanner-password');
-  await page.locator('[name=admin_password]').fill('browser test password 2026');
-  await page.locator('[name=admin_code]').fill(code);
   await page.getByRole('button', { name: 'Speichern' }).click();
   await expect(page.getByRole('status')).toContainText('Gespeichert');
   const login = await request.post('http://127.0.0.1:12447/NmWebService/authorization', {

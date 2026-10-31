@@ -7,7 +7,7 @@ import sys
 
 
 def check(compose_files: list[str]) -> None:
-    command = ["docker", "compose"]
+    command = ["docker", "compose", "--env-file", "/dev/null"]
     for path in compose_files:
         command += ["-f", path]
     command += ["config", "--format", "json"]

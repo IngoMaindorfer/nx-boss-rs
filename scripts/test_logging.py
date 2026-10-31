@@ -102,10 +102,11 @@ def main(binary):
                 assert status == 200
                 batch_id = json.loads(data)["batch_id"]
                 boundary = "logging-test"
+                image = (Path(__file__).parent.parent / "tests/fixtures/scan_page.jpg").read_bytes()
                 body = (
                     f'--{boundary}\r\nContent-Disposition: form-data; name="image"; '
                     f'filename="{secrets[3]}.jpg"\r\nContent-Type: image/jpeg\r\n\r\n'
-                ).encode() + b"\xff\xd8\xff\xd9" + (
+                ).encode() + image + (
                     f'\r\n--{boundary}\r\nContent-Disposition: form-data; name="parameter"\r\n\r\n'
                     + json.dumps({"batch_id": batch_id, "user_name": secrets[6], "password": secrets[7]})
                     + f'\r\n--{boundary}\r\nContent-Disposition: form-data; name="imageparameter"\r\n\r\n'
@@ -119,7 +120,7 @@ def main(binary):
                 # A token that happens to look like a batch UUID must not be logged
                 # before the batch has been looked up in server state.
                 invalid_body = body.replace(
-                    b"\xff\xd8\xff\xd9", b"not-jpeg"
+                    image, b"not-jpeg"
                 ).replace(batch_id.encode(), secrets[5].encode())
                 assert send(
                     scanner_port, "POST", "/NmWebService/image", invalid_body,

@@ -225,10 +225,14 @@ fn archive_batch(
     ));
 
     let build_result = (|| -> Result<()> {
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&archive_tmp)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options.open(&archive_tmp)?;
         let encoder = zstd::Encoder::new(file, 3)?;
         let mut tar = tar::Builder::new(encoder);
         tar.append_dir_all(batch_id, batch_dir)?;
@@ -244,9 +248,11 @@ fn archive_batch(
 
     // Sidecar preserves original creation date so delete-age is measured from
     // batch creation, not from when archiving ran.
-    std::fs::write(
+    crate::atomic_file::write(
         &meta_path,
-        serde_json::json!({ "created_at": created_at }).to_string(),
+        serde_json::json!({ "created_at": created_at })
+            .to_string()
+            .as_bytes(),
     )?;
 
     std::fs::remove_dir_all(batch_dir)?;
@@ -306,6 +312,25 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn archives_and_sidecars_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let id = "0123456789abcdef0123456789abcdef";
+        let dir = root.path().join(id);
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("page.jpg"), b"fixture").unwrap();
+        archive_batch(&dir, id, root.path(), "2026-10-31T12:00:00Z").unwrap();
+        for extension in ["tar.zst", "meta"] {
+            let path = root.path().join(format!("{id}.{extension}"));
+            assert_eq!(
+                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
     }
 
     #[test]

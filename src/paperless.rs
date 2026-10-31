@@ -17,6 +17,7 @@ pub struct PaperlessClient {
     base_url: Url,
     token: String,
     config: PaperlessConfig,
+    timezone: chrono_tz::Tz,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -78,6 +79,10 @@ impl PaperlessClient {
             http,
             base_url,
             token,
+            timezone: std::env::var("NX_BOSS_TIMEZONE")
+                .unwrap_or_else(|_| "Europe/Berlin".into())
+                .parse()
+                .context("invalid NX_BOSS_TIMEZONE")?,
             config,
         })
     }
@@ -351,7 +356,20 @@ async fn process_batch(client: &PaperlessClient, batch: &mut Batch) -> Result<()
             TaskStatus::Success(document_id) => batch.record_paperless_document(document_id)?,
             TaskStatus::Failed(error) => batch.record_paperless_error(&error)?,
             TaskStatus::Missing => reconcile_or_retry(client, batch).await?,
-            TaskStatus::Pending => {}
+            TaskStatus::Pending => {
+                let since = receipt
+                    .last_attempt_at
+                    .as_deref()
+                    .unwrap_or(&batch.metadata().created_at);
+                if DateTime::parse_from_rfc3339(since)
+                    .map(|time| Utc::now().signed_duration_since(time).num_hours() >= 1)
+                    .unwrap_or(true)
+                {
+                    batch.record_paperless_error(
+                        "Paperless task pending for over one hour; inspect or retry manually",
+                    )?;
+                }
+            }
         }
     } else if receipt.upload_attempts > 0 || receipt.last_error.is_some() {
         reconcile_or_retry(client, batch).await?;
@@ -386,21 +404,19 @@ async fn reconcile_or_retry(client: &PaperlessClient, batch: &mut Batch) -> Resu
     Ok(())
 }
 
+fn local_scan_date(created_at: &str, timezone: chrono_tz::Tz) -> Result<String> {
+    Ok(DateTime::parse_from_rfc3339(created_at)?
+        .with_timezone(&timezone)
+        .format("%Y-%m-%d")
+        .to_string())
+}
+
 async fn upload_batch(client: &PaperlessClient, batch: &mut Batch) -> Result<()> {
     let pdf = tokio::fs::read(batch.pdf_path())
         .await
         .context("reading staged PDF")?;
-    let title = format!(
-        "{} {}",
-        batch.metadata().job_name,
-        batch.metadata().created_at.get(..10).unwrap_or("")
-    );
-    let created = batch
-        .metadata()
-        .created_at
-        .get(..10)
-        .unwrap_or("")
-        .to_string();
+    let created = local_scan_date(&batch.metadata().created_at, client.timezone)?;
+    let title = format!("{} {}", batch.metadata().job_name, created);
     let options = batch
         .metadata()
         .paperless
@@ -459,6 +475,7 @@ pub async fn run_forever(
     jobs: JobStore,
     client: std::sync::Arc<std::sync::Mutex<Option<PaperlessClient>>>,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
+    delivery_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
 ) {
     let mut interval = tokio::time::interval(Duration::from_secs(30));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -482,6 +499,7 @@ pub async fn run_forever(
             continue;
         };
         let snapshot = lock!(jobs).clone();
+        let _delivery = delivery_lock.lock().await;
         run_once_until_shutdown(&snapshot, &client_snapshot, Some(&shutdown)).await;
     }
 }
@@ -501,6 +519,19 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+
+    #[test]
+    fn scan_dates_use_berlin_midnight_in_summer_and_winter() {
+        let zone: chrono_tz::Tz = "Europe/Berlin".parse().unwrap();
+        assert_eq!(
+            local_scan_date("2026-07-01T22:30:00Z", zone).unwrap(),
+            "2026-07-02"
+        );
+        assert_eq!(
+            local_scan_date("2026-01-01T23:30:00Z", zone).unwrap(),
+            "2026-01-02"
+        );
+    }
 
     #[tokio::test]
     async fn shutdown_waits_for_current_upload_and_stops_before_next_batch() {
@@ -597,6 +628,7 @@ mod tests {
             JobStore::new(vec![job.clone()]),
             std::sync::Arc::new(std::sync::Mutex::new(Some(client))),
             shutdown_rx,
+            std::sync::Arc::new(tokio::sync::Mutex::new(())),
         ));
         tokio::time::timeout(Duration::from_secs(3), started_rx)
             .await

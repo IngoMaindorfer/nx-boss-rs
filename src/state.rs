@@ -115,6 +115,7 @@ pub struct AppState {
     pub batches: BatchStore,
     pub retention: Arc<Mutex<RetentionConfig>>,
     pub config_change_lock: Arc<Mutex<()>>,
+    pub delivery_lock: Arc<tokio::sync::Mutex<()>>,
     pub next_job_id: Arc<Mutex<usize>>,
     pub paperless_config: Arc<Mutex<Option<PaperlessConfig>>>,
     pub paperless_client: Arc<Mutex<Option<PaperlessClient>>>,
@@ -176,6 +177,7 @@ impl AppState {
             batches: BatchStore(Arc::new(Mutex::new(recovered))),
             retention: Arc::new(Mutex::new(config.retention)),
             config_change_lock: Arc::new(Mutex::new(())),
+            delivery_lock: Arc::new(tokio::sync::Mutex::new(())),
             next_job_id: Arc::new(Mutex::new(next_job_id)),
             paperless_config: Arc::new(Mutex::new(config.paperless)),
             paperless_client: Arc::new(Mutex::new(None)),
@@ -363,6 +365,25 @@ impl AppState {
             }
             return Err(error);
         }
+        let old_token = previous.and_then(|cfg| cfg.token_file);
+        let next_token = config.as_ref().and_then(|cfg| cfg.token_file.as_ref());
+        if let Some(path) = old_token.as_ref().filter(|old| Some(*old) != next_token)
+            && path.parent() == self.config_path.as_ref().and_then(|p| p.parent())
+            && path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                n.strip_prefix("paperless-token-")
+                    .is_some_and(crate::batch::valid_batch_id)
+            })
+            && path
+                .symlink_metadata()
+                .is_ok_and(|m| m.file_type().is_file())
+            && std::fs::remove_file(path).is_err()
+        {
+            tracing::warn!(
+                event = "paperless.old_token_cleanup_failed",
+                error_class = "storage",
+                "obsolete token cleanup failed"
+            );
+        }
         *lock!(self.paperless_config) = config;
         *lock!(self.paperless_client) = next_client;
         Ok(())
@@ -455,12 +476,24 @@ mod tests {
             .unwrap()
             .token_file
             .unwrap();
+        assert!(
+            !first_path.exists(),
+            "replaced generated token must be removed"
+        );
         assert_ne!(first_path, next_path);
-        assert_eq!(std::fs::read_to_string(next_path).unwrap(), "second-secret");
+        assert_eq!(
+            std::fs::read_to_string(&next_path).unwrap(),
+            "second-secret"
+        );
         assert!(
             !std::fs::read_to_string(path)
                 .unwrap()
                 .contains("second-secret")
+        );
+        state.update_paperless(None, None).unwrap();
+        assert!(
+            !next_path.exists(),
+            "disabled integration must remove its generated token"
         );
     }
 

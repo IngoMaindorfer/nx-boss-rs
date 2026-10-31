@@ -1,6 +1,6 @@
 use askama::Template;
 use axum::{
-    Form, Json,
+    Json,
     extract::State,
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Redirect, Response},
@@ -14,25 +14,12 @@ use crate::state::AppState;
 #[derive(Template)]
 #[template(path = "admin_login.html")]
 struct LoginTpl {
-    error: bool,
     lang: &'static str,
-    passkey_enabled: bool,
 }
 
 #[derive(Template)]
 #[template(path = "admin_setup.html")]
 struct SetupTpl {
-    error: bool,
-    lang: &'static str,
-}
-
-#[derive(Template)]
-#[template(path = "admin_setup_confirm.html")]
-struct SetupConfirmTpl {
-    token: String,
-    manual_secret: String,
-    otpauth_url: String,
-    error: bool,
     lang: &'static str,
 }
 
@@ -40,68 +27,9 @@ struct SetupConfirmTpl {
 #[template(path = "account.html")]
 struct AccountTpl {
     username: String,
-    error: bool,
     lang: &'static str,
-    passkey_enabled: bool,
     passkey_count: usize,
-}
-
-#[derive(Template)]
-#[template(path = "account_totp.html")]
-struct AccountTotpTpl {
-    manual_secret: String,
-    otpauth_url: String,
-    error: bool,
-    lang: &'static str,
-}
-
-#[derive(Deserialize)]
-pub struct AccountForm {
-    password: String,
-    code: String,
-    username: String,
-    new_password: String,
-}
-
-#[derive(Deserialize)]
-pub struct ReauthForm {
-    password: String,
-    code: String,
-}
-
-#[derive(Deserialize)]
-pub struct TotpCompleteForm {
-    code: String,
-}
-
-#[derive(Deserialize)]
-pub struct LoginForm {
-    username: String,
-    password: String,
-    code: String,
-}
-#[derive(Deserialize)]
-pub struct PrepareForm {
-    token: String,
-    username: String,
-}
-#[derive(Deserialize)]
-pub struct CompleteForm {
-    token: String,
-    password: String,
-    code: String,
-}
-
-fn preferred_lang(headers: &HeaderMap) -> &'static str {
-    if headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|cookie| cookie.split(';').any(|part| part.trim() == "ui_lang=en"))
-    {
-        "en"
-    } else {
-        "de"
-    }
+    passkeys: Vec<crate::admin_auth::PasskeyView>,
 }
 
 pub(super) fn secure_origin(headers: &HeaderMap) -> bool {
@@ -124,17 +52,14 @@ fn session_cookie(token: &str) -> String {
 
 pub async fn login_get(State(state): State<AppState>, headers: HeaderMap) -> Response {
     render(LoginTpl {
-        error: false,
-        lang: preferred_lang(&headers),
-        passkey_enabled: state
-            .admin_auth
-            .as_ref()
-            .is_some_and(|auth| auth.passkey_configured()),
+        lang: super::request_lang(&state, &headers),
     })
 }
 
 #[derive(Deserialize)]
 pub struct PasskeySetupStart {
+    #[serde(default)]
+    name: String,
     token: String,
     username: String,
 }
@@ -152,6 +77,9 @@ fn passkey_challenge(result: anyhow::Result<(String, Value)>) -> Response {
         Ok((flow, challenge)) => {
             Json(json!({ "flow": flow, "challenge": challenge })).into_response()
         }
+        Err(error) if error.is::<crate::admin_auth::LoginRateLimited>() => {
+            StatusCode::TOO_MANY_REQUESTS.into_response()
+        }
         Err(_) => StatusCode::UNAUTHORIZED.into_response(),
     }
 }
@@ -167,10 +95,10 @@ pub async fn passkey_setup_start(
     if form.token.len() > 128 || form.username.len() > 64 {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let Some(auth) = state.admin_auth else {
+    let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    passkey_challenge(auth.start_passkey_setup(&form.token, &form.username))
+    passkey_challenge(auth.start_passkey_setup(&form.token, &form.username, &form.name))
 }
 
 pub async fn passkey_setup_finish(
@@ -184,7 +112,7 @@ pub async fn passkey_setup_finish(
     if form.flow.len() != 64 || form.token.len() > 128 {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let Some(auth) = state.admin_auth else {
+    let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     match auth.finish_passkey_setup(&form.flow, &form.token, form.credential) {
@@ -201,10 +129,16 @@ pub async fn passkey_login_start(State(state): State<AppState>, headers: HeaderM
     if !secure_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let Some(auth) = state.admin_auth else {
+    let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    passkey_challenge(auth.start_passkey_login())
+    // Only Caddy reaches this listener; Caddy supplies the actual peer in XFF.
+    let client = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .and_then(|v| v.trim().parse().ok());
+    passkey_challenge(auth.start_passkey_login(client))
 }
 
 pub async fn passkey_login_finish(
@@ -218,7 +152,7 @@ pub async fn passkey_login_finish(
     if form.flow.len() != 64 {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let Some(auth) = state.admin_auth else {
+    let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     match auth.finish_passkey_authentication(&form.flow, None, form.credential) {
@@ -235,7 +169,7 @@ pub async fn passkey_stepup_start(State(state): State<AppState>, headers: Header
     if !secure_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let Some(auth) = state.admin_auth else {
+    let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let Some(session) = super::admin_cookie(&headers) else {
@@ -252,7 +186,7 @@ pub async fn passkey_stepup_finish(
     if !secure_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let Some(auth) = state.admin_auth else {
+    let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let Some(session) = super::admin_cookie(&headers) else {
@@ -264,17 +198,21 @@ pub async fn passkey_stepup_finish(
     }
 }
 
-pub async fn passkey_add_start(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub async fn passkey_add_start(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(form): Json<PasskeyName>,
+) -> Response {
     if !secure_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let Some(auth) = state.admin_auth else {
+    let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let Some(session) = super::admin_cookie(&headers) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    passkey_challenge(auth.start_passkey_add(session))
+    passkey_challenge(auth.start_passkey_add(session, &form.name))
 }
 
 pub async fn passkey_add_finish(
@@ -285,7 +223,7 @@ pub async fn passkey_add_finish(
     if !secure_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let Some(auth) = state.admin_auth else {
+    let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     let Some(session) = super::admin_cookie(&headers) else {
@@ -294,38 +232,6 @@ pub async fn passkey_add_finish(
     match auth.finish_passkey_add(&form.flow, session, form.credential) {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(_) => StatusCode::UNAUTHORIZED.into_response(),
-    }
-}
-
-pub async fn login_post(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Form(form): Form<LoginForm>,
-) -> Response {
-    if !secure_origin(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    if form.username.len() > 64 || form.password.len() > 512 || form.code.len() > 16 {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    let Some(auth) = state.admin_auth else {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    };
-    let passkey_enabled = auth.passkey_configured();
-    let result =
-        tokio::task::spawn_blocking(move || auth.login(&form.username, &form.password, &form.code))
-            .await;
-    match result {
-        Ok(Some(token)) => (
-            [(header::SET_COOKIE, session_cookie(&token))],
-            Redirect::to("/"),
-        )
-            .into_response(),
-        _ => render(LoginTpl {
-            error: true,
-            lang: preferred_lang(&headers),
-            passkey_enabled,
-        }),
     }
 }
 
@@ -354,180 +260,51 @@ pub async fn setup_get(State(state): State<AppState>, headers: HeaderMap) -> Res
         return Redirect::to("/").into_response();
     }
     render(SetupTpl {
-        error: false,
-        lang: preferred_lang(&headers),
+        lang: super::request_lang(&state, &headers),
     })
-}
-
-pub async fn setup_prepare(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Form(form): Form<PrepareForm>,
-) -> Response {
-    if std::env::var("NX_BOSS_LEGACY_ADMIN_SETUP").as_deref() != Ok("1") {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    if !secure_origin(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    let Some(auth) = state.admin_auth else {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    };
-    match auth.prepare_setup(&form.token, &form.username) {
-        Ok(preview) => render(SetupConfirmTpl {
-            token: form.token,
-            manual_secret: preview.manual_secret,
-            otpauth_url: preview.otpauth_url,
-            error: false,
-            lang: preferred_lang(&headers),
-        }),
-        Err(_) => render(SetupTpl {
-            error: true,
-            lang: preferred_lang(&headers),
-        }),
-    }
-}
-
-pub async fn setup_complete(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Form(form): Form<CompleteForm>,
-) -> Response {
-    if std::env::var("NX_BOSS_LEGACY_ADMIN_SETUP").as_deref() != Ok("1") {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    if !secure_origin(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    if form.password.len() > 512 || form.code.len() > 16 {
-        return StatusCode::BAD_REQUEST.into_response();
-    }
-    let Some(auth) = state.admin_auth else {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    };
-    let result = tokio::task::spawn_blocking(move || {
-        auth.complete_setup(&form.token, &form.password, &form.code)
-    })
-    .await;
-    match result {
-        Ok(Ok(token)) => (
-            [(header::SET_COOKIE, session_cookie(&token))],
-            Redirect::to("/"),
-        )
-            .into_response(),
-        _ => render(SetupTpl {
-            error: true,
-            lang: preferred_lang(&headers),
-        }),
-    }
 }
 
 pub async fn account_get(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let Some(auth) = state.admin_auth else {
+    let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     render(AccountTpl {
         username: auth.username().unwrap_or_default(),
-        error: false,
-        lang: preferred_lang(&headers),
-        passkey_enabled: auth.passkey_configured(),
+        lang: super::request_lang(&state, &headers),
         passkey_count: auth.passkey_count(),
+        passkeys: auth.passkeys(),
     })
 }
 
-pub async fn account_post(
+#[derive(Deserialize)]
+pub struct PasskeyName {
+    #[serde(default)]
+    name: String,
+}
+#[derive(Deserialize)]
+pub struct PasskeyRemove {
+    key_id: String,
+}
+pub async fn passkey_remove(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Form(form): Form<AccountForm>,
+    Json(form): Json<PasskeyRemove>,
 ) -> Response {
     if !secure_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    if form.password.len() > 512 || form.new_password.len() > 512 || form.code.len() > 16 {
+    if form.key_id.len() > 4096 {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let Some(auth) = state.admin_auth else {
+    let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    let display_name = auth.username().unwrap_or_default();
-    match tokio::task::spawn_blocking(move || {
-        auth.update_account(
-            &form.password,
-            &form.code,
-            &form.username,
-            &form.new_password,
-        )
-    })
-    .await
-    {
-        Ok(Ok(())) => (
-            [(header::SET_COOKIE, expired_session_cookie())],
-            Redirect::to("/login"),
-        )
-            .into_response(),
-        _ => render(AccountTpl {
-            username: display_name,
-            error: true,
-            lang: preferred_lang(&headers),
-            passkey_enabled: false,
-            passkey_count: 0,
-        }),
-    }
-}
-
-fn expired_session_cookie() -> &'static str {
-    "__Host-nx-admin=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0"
-}
-
-pub async fn totp_prepare(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Form(form): Form<ReauthForm>,
-) -> Response {
-    if !secure_origin(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    if form.password.len() > 512 || form.code.len() > 16 {
-        return StatusCode::BAD_REQUEST.into_response();
-    }
-    let Some(auth) = state.admin_auth else {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    let Some(session) = super::admin_cookie(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
     };
-    match tokio::task::spawn_blocking(move || {
-        auth.prepare_totp_rotation(&form.password, &form.code)
-    })
-    .await
-    {
-        Ok(Ok(preview)) => render(AccountTotpTpl {
-            manual_secret: preview.manual_secret,
-            otpauth_url: preview.otpauth_url,
-            error: false,
-            lang: preferred_lang(&headers),
-        }),
-        _ => StatusCode::UNAUTHORIZED.into_response(),
-    }
-}
-
-pub async fn totp_complete(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Form(form): Form<TotpCompleteForm>,
-) -> Response {
-    if !secure_origin(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    if form.code.len() > 16 {
-        return StatusCode::BAD_REQUEST.into_response();
-    }
-    let Some(auth) = state.admin_auth else {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    };
-    match auth.complete_totp_rotation(&form.code) {
-        Ok(token) => (
-            [(header::SET_COOKIE, session_cookie(&token))],
-            Redirect::to("/account"),
-        )
-            .into_response(),
-        Err(_) => StatusCode::UNAUTHORIZED.into_response(),
+    match auth.remove_passkey(session, &form.key_id) {
+        Ok(true) => Json(json!({"ok":true})).into_response(),
+        Ok(false) => StatusCode::UNAUTHORIZED.into_response(),
+        Err(_) => StatusCode::CONFLICT.into_response(),
     }
 }

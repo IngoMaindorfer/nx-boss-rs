@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+import urllib.error
 from pathlib import Path
 
 
@@ -19,19 +20,25 @@ def free_port():
         return sock.getsockname()[1]
 
 
-def request(port, method, path, body=None):
+def request(port, method, path, body=None, token=None):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}{path}",
         data=body,
         method=method,
-        headers={"Content-Type": "application/json"} if body else {},
+        headers={"Content-Type": "application/json", "X-Forwarded-Proto": "https", **({"Authorization": "Bearer " + token} if token else {})},
     )
-    with urllib.request.urlopen(req, timeout=5) as response:
-        return response.status, response.read()
+    try:
+        with urllib.request.urlopen(req, timeout=5) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as response:
+        return response.code, response.read()
 
 
-def start_server(binary, config, scanner_port, admin_port, log):
+def start_server(binary, config, scanner_port, admin_port, log, mode):
     env = os.environ.copy()
+    env["NX_BOSS_SCANNER_AUTH_MODE"] = mode
+    env["NX_BOSS_SCANNER_USERNAME"] = "shutdown-scanner"
+    env["NX_BOSS_SCANNER_PASSWORD_FILE"] = str(config.parent / "scanner-password")
     env["NX_BOSS_AUTH_PEPPER_FILE"] = str(config.parent / "auth-pepper")
     process = subprocess.Popen(
         [binary, "--config", str(config), "--host", "127.0.0.1", "--port", str(scanner_port),
@@ -57,26 +64,38 @@ def stop_server(process):
     assert process.wait(timeout=10) == 0, "server did not finish SIGTERM cleanly"
 
 
-def main(binary):
+def login(port):
+    status, data = request(port, "POST", "/NmWebService/authorization", json.dumps({
+        "auth_type": "userpass", "auth_info_user": "shutdown-scanner", "auth_info_pass": "shutdown-test-password",
+    }).encode())
+    assert status == 200, "disposable scanner login failed"
+    return json.loads(data)["access_token"]
+
+
+def run(binary, mode):
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         scans = root / "scans"
         scans.mkdir()
         config = root / "config.yaml"
         config.write_text(f"jobs:\n  ShutdownTest:\n    output_path: {scans}\n")
+        password = root / "scanner-password"
+        password.write_text("shutdown-test-password")
+        password.chmod(0o600)
         pepper = root / "auth-pepper"
         pepper.write_bytes(os.urandom(32))
         pepper.chmod(0o600)
         scanner_port, admin_port = free_port(), free_port()
         assert scanner_port != admin_port
         with (root / "server.log").open("wb") as log:
-            process = start_server(binary, config, scanner_port, admin_port, log)
+            process = start_server(binary, config, scanner_port, admin_port, log, mode)
             try:
-                status, data = request(scanner_port, "POST", "/NmWebService/batch", b'{"job_id":0}')
+                token = login(scanner_port) if mode == "userpass" else None
+                status, data = request(scanner_port, "POST", "/NmWebService/batch", b'{"job_id":0}', token)
                 assert status == 200
                 batch_id = json.loads(data)["batch_id"]
                 boundary = "shutdown-test-boundary"
-                image = b"\xff\xd8\xff\xd9"
+                image = (Path(__file__).parent.parent / "tests/fixtures/scan_page.jpg").read_bytes()
                 body = (
                     f'--{boundary}\r\nContent-Disposition: form-data; name="image"; filename="page.jpg"\r\n'
                     'Content-Type: image/jpeg\r\n\r\n'
@@ -92,7 +111,8 @@ def main(binary):
                         "Host: 127.0.0.1\r\n"
                         f"Content-Type: multipart/form-data; boundary={boundary}\r\n"
                         f"Content-Length: {len(body)}\r\n"
-                        "Connection: close\r\n\r\n"
+                        + (f"Authorization: Bearer {token}\r\n" if token else "")
+                        + "X-Forwarded-Proto: https\r\nConnection: close\r\n\r\n"
                     ).encode())
                     upload.sendall(body[: len(body) // 2])
                     time.sleep(0.1)
@@ -111,9 +131,12 @@ def main(binary):
                 assert [item["filename"] for item in metadata["files"]] == ["page.jpg"]
                 assert (scans / batch_id / "page.jpg").read_bytes() == image
 
-                restarted = start_server(binary, config, scanner_port, admin_port, log)
+                restarted = start_server(binary, config, scanner_port, admin_port, log, mode)
                 try:
-                    assert request(scanner_port, "PUT", f"/NmWebService/batch/{batch_id}")[0] == 200
+                    if mode == "userpass":
+                        assert request(scanner_port, "PUT", f"/NmWebService/batch/{batch_id}", token=token)[0] == 401
+                        token = login(scanner_port)
+                    assert request(scanner_port, "PUT", f"/NmWebService/batch/{batch_id}", token=token)[0] == 200
                 finally:
                     stop_server(restarted)
                 assert json.loads(metadata_path.read_text())["completed"]
@@ -121,8 +144,9 @@ def main(binary):
                 if process.poll() is None:
                     process.kill()
                     process.wait()
-    print("SIGTERM drained upload; batch recovered and completed after restart")
+    print(f"{mode}: SIGTERM drained upload; batch recovered and completed after restart")
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    for selected_mode in ["none", "userpass"]:
+        run(sys.argv[1], selected_mode)

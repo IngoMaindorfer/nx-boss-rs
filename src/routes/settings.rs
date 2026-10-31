@@ -24,7 +24,6 @@ struct ScannerSecurityTpl {
     error: bool,
     saved: bool,
     lang: &'static str,
-    passkey_enabled: bool,
 }
 
 #[derive(Template)]
@@ -36,9 +35,9 @@ struct PaperlessSettingsTpl {
     field_id: String,
     token_set: bool,
     saved: bool,
-    error: bool,
+    error: Option<&'static str>,
+    paused: bool,
     lang: &'static str,
-    passkey_enabled: bool,
 }
 
 #[derive(Deserialize)]
@@ -48,13 +47,14 @@ pub struct PaperlessSettingsForm {
     tags: String,
     field_id: String,
     new_token: String,
-    #[serde(default)]
-    admin_password: String,
-    #[serde(default)]
-    admin_code: String,
 }
 
-fn paperless_view(state: &AppState, headers: &HeaderMap, saved: bool, error: bool) -> Response {
+fn paperless_view(
+    state: &AppState,
+    headers: &HeaderMap,
+    saved: bool,
+    error: Option<&'static str>,
+) -> Response {
     let config = lock!(state.paperless_config).clone();
     let config = config.as_ref();
     render(PaperlessSettingsTpl {
@@ -70,19 +70,35 @@ fn paperless_view(state: &AppState, headers: &HeaderMap, saved: bool, error: boo
         field_id: config
             .and_then(|cfg| cfg.batch_id_field_id)
             .map_or_else(String::new, |id| id.to_string()),
+        paused: config.is_some() && lock!(state.paperless_client).is_none(),
         token_set: config.is_some_and(|cfg| cfg.token_file.is_some() || !cfg.token_env.is_empty()),
         saved,
         error,
-        lang: security_lang(headers),
-        passkey_enabled: state
-            .admin_auth
-            .as_ref()
-            .is_some_and(|auth| auth.passkey_configured()),
+        lang: super::request_lang(state, headers),
     })
 }
 
 pub async fn paperless_get(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    paperless_view(&state, &headers, false, false)
+    paperless_view(&state, &headers, false, None)
+}
+
+fn message(
+    state: &AppState,
+    headers: &HeaderMap,
+    de: &'static str,
+    en: &'static str,
+) -> &'static str {
+    if super::request_lang(state, headers) == "de" {
+        de
+    } else {
+        en
+    }
+}
+
+fn confirmation_expired(state: &AppState, headers: &HeaderMap) -> Response {
+    (StatusCode::UNAUTHORIZED, axum::response::Html(message(state, headers,
+        "Passkey-Bestätigung fehlt oder ist abgelaufen. Zurück zum Formular und erneut bestätigen.",
+        "Passkey confirmation is missing or expired. Return to the form and confirm again."))).into_response()
 }
 
 pub async fn paperless_post(
@@ -97,21 +113,55 @@ pub async fn paperless_post(
         || form.tags.len() > 512
         || form.field_id.len() > 16
         || form.new_token.len() > 4096
-        || form.admin_password.len() > 512
-        || form.admin_code.len() > 16
     {
         return StatusCode::BAD_REQUEST.into_response();
     }
     let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    let authorized = if auth.passkey_configured() {
-        super::admin_cookie(&headers).is_some_and(|session| auth.consume_passkey_stepup(session))
-    } else {
-        auth.reauthenticate(&form.admin_password, &form.admin_code)
-    };
+    let authorized =
+        super::admin_cookie(&headers).is_some_and(|session| auth.consume_passkey_stepup(session));
     if !authorized {
-        return StatusCode::UNAUTHORIZED.into_response();
+        return confirmation_expired(&state, &headers);
+    }
+    if form.enabled == "yes" {
+        let valid_url = reqwest::Url::parse(form.url.trim()).is_ok_and(|url| {
+            matches!(url.scheme(), "http" | "https")
+                && url.host_str().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none()
+        });
+        let valid_ids = form
+            .tags
+            .split(',')
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .all(|v| v.parse::<u32>().is_ok_and(|id| id > 0))
+            && form.tags.split(',').count() <= 64
+            && (form.field_id.trim().is_empty()
+                || form.field_id.trim().parse::<u32>().is_ok_and(|id| id > 0));
+        let error = if !valid_url {
+            Some(message(
+                &state,
+                &headers,
+                "Ungültige Paperless-URL: HTTP(S) ohne Zugangsdaten, Query oder Fragment verwenden.",
+                "Invalid Paperless URL: use HTTP(S) without credentials, query or fragment.",
+            ))
+        } else if !valid_ids {
+            Some(message(
+                &state,
+                &headers,
+                "Ungültige Tag- oder Feld-ID: positive ganze Zahlen verwenden.",
+                "Invalid tag or field ID: use positive integers.",
+            ))
+        } else {
+            None
+        };
+        if error.is_some() {
+            return paperless_view(&state, &headers, false, error);
+        }
     }
     let task_state = state.clone();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
@@ -155,8 +205,41 @@ pub async fn paperless_post(
         )
     })
     .await;
-    let saved = matches!(result, Ok(Ok(())));
-    paperless_view(&state, &headers, saved, !saved)
+    let error = match result {
+        Ok(Ok(())) => None,
+        Ok(Err(error))
+            if error
+                .downcast_ref::<crate::batch::CorruptBatchError>()
+                .is_some() =>
+        {
+            Some(message(
+                &state,
+                &headers,
+                "Defekte Scanmetadaten blockieren den Zielwechsel. Scanübersicht prüfen.",
+                "Corrupt scan metadata blocks changing the target. Check the scan list.",
+            ))
+        }
+        Ok(Err(error))
+            if matches!(
+                error.to_string().as_str(),
+                "scanner batch still in progress" | "Paperless delivery still pending"
+            ) =>
+        {
+            Some(message(
+                &state,
+                &headers,
+                "Offene Scans oder ausstehende Zustellungen blockieren den Zielwechsel.",
+                "Open scans or pending deliveries block changing the target.",
+            ))
+        }
+        _ => Some(message(
+            &state,
+            &headers,
+            "Speichern fehlgeschlagen. Token-Konfiguration und privaten Dateispeicher prüfen.",
+            "Saving failed. Check the token configuration and private file storage.",
+        )),
+    };
+    paperless_view(&state, &headers, error.is_none(), error)
 }
 
 #[derive(Deserialize)]
@@ -164,22 +247,6 @@ pub struct ScannerSecurityForm {
     mode: String,
     username: String,
     new_password: String,
-    #[serde(default)]
-    admin_password: String,
-    #[serde(default)]
-    admin_code: String,
-}
-
-fn security_lang(headers: &HeaderMap) -> &'static str {
-    if headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.split(';').any(|part| part.trim() == "ui_lang=en"))
-    {
-        "en"
-    } else {
-        "de"
-    }
 }
 
 fn scanner_security_view(
@@ -201,11 +268,7 @@ fn scanner_security_view(
             .is_some(),
         error,
         saved,
-        lang: security_lang(headers),
-        passkey_enabled: state
-            .admin_auth
-            .as_ref()
-            .is_some_and(|auth| auth.passkey_configured()),
+        lang: super::request_lang(state, headers),
     })
 }
 
@@ -221,23 +284,16 @@ pub async fn scanner_security_post(
     if !super::admin::secure_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    if form.admin_password.len() > 512
-        || form.new_password.len() > 512
-        || form.admin_code.len() > 16
-        || form.username.len() > 128
-    {
+    if form.new_password.len() > 512 || form.username.len() > 128 {
         return StatusCode::BAD_REQUEST.into_response();
     }
     let Some(auth) = state.admin_auth.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    let authorized = if auth.passkey_configured() {
-        super::admin_cookie(&headers).is_some_and(|session| auth.consume_passkey_stepup(session))
-    } else {
-        auth.reauthenticate(&form.admin_password, &form.admin_code)
-    };
+    let authorized =
+        super::admin_cookie(&headers).is_some_and(|session| auth.consume_passkey_stepup(session));
     if !authorized {
-        return StatusCode::UNAUTHORIZED.into_response();
+        return confirmation_expired(&state, &headers);
     }
     let state_for_write = state.clone();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
@@ -357,13 +413,12 @@ pub async fn settings_post(
 
 #[cfg(test)]
 mod tests {
-    use axum_test::TestServer;
 
     use crate::config::{Config, Job};
-    use crate::routes::router;
+    use crate::routes::test_support::TestApp;
     use crate::state::AppState;
 
-    fn test_server() -> (TestServer, tempfile::TempDir) {
+    fn test_server() -> (TestApp, tempfile::TempDir) {
         let tmp = tempfile::TempDir::new().unwrap();
         let config = Config {
             jobs: vec![Job {
@@ -377,7 +432,45 @@ mod tests {
             }],
             ..Default::default()
         };
-        (TestServer::new(router(AppState::new(config))), tmp)
+        (TestApp::new(AppState::new(config)), tmp)
+    }
+
+    #[tokio::test]
+    async fn paperless_errors_distinguish_confirmation_url_and_ids() {
+        let root = tempfile::tempdir().unwrap();
+        let auth = crate::admin_auth::AdminAuth::open(root.path(), &[0x43; 32]).unwrap();
+        let session = auth.test_session();
+        let mut state = AppState::new(Config::default());
+        state.admin_auth = Some(auth.clone());
+        let server = axum_test::TestServer::new(crate::routes::admin_router_with_hosts(
+            state,
+            vec!["localhost".into()],
+        ));
+        for (confirmed, url, tags, expected, status) in [
+            (false, "http://localhost:8000", "", "Bestätigung", 401),
+            (true, "file:///private", "", "URL", 200),
+            (true, "http://localhost:8000", "wrong", "Tag", 200),
+        ] {
+            if confirmed {
+                auth.test_confirm_stepup(&session);
+            }
+            let response = server
+                .post("/settings/paperless")
+                .add_header("host", "localhost")
+                .add_header("origin", "https://localhost")
+                .add_header("x-forwarded-proto", "https")
+                .add_header("cookie", format!("__Host-nx-admin={session}"))
+                .form(&[
+                    ("enabled", "yes"),
+                    ("url", url),
+                    ("tags", tags),
+                    ("field_id", ""),
+                    ("new_token", ""),
+                ])
+                .await;
+            assert_eq!(response.status_code(), status);
+            assert!(response.text().contains(expected), "missing {expected}");
+        }
     }
 
     #[tokio::test]
@@ -391,6 +484,8 @@ mod tests {
         let (server, _tmp) = test_server();
         let resp = server
             .post("/settings")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[("archive_after_days", "7"), ("delete_after_days", "30")])
             .await;
@@ -403,6 +498,8 @@ mod tests {
         let (server, _tmp) = test_server();
         let resp = server
             .post("/settings")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[("archive_after_days", "30"), ("delete_after_days", "7")])
             .await;
@@ -415,6 +512,8 @@ mod tests {
         let (server, _tmp) = test_server();
         let resp = server
             .post("/settings")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[("archive_after_days", "0"), ("delete_after_days", "0")])
             .await;
@@ -427,6 +526,8 @@ mod tests {
         let (server, _tmp) = test_server();
         let resp = server
             .post("/settings")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[("archive_after_days", "7"), ("delete_after_days", "0")])
             .await;

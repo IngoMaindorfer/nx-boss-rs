@@ -5,6 +5,7 @@
 }
 
 https://{$NX_BOSS_ADMIN_DOMAIN:nx.maindorfer.name}:{$NX_BOSS_ADMIN_HTTPS_PORT} {
+	header Strict-Transport-Security "max-age=31536000"
 	tls {
 		dns cloudflare {env.CF_API_TOKEN}
 		resolvers 1.1.1.1
@@ -21,6 +22,7 @@ http://:{$NX_BOSS_SCANNER_HTTP_PORT} {
 }
 
 https://{$NX_BOSS_ADMIN_DOMAIN:nx.maindorfer.name}:{$NX_BOSS_SCANNER_HTTPS_PORT} {
+	header Strict-Transport-Security "max-age=31536000"
 	tls {
 		dns cloudflare {env.CF_API_TOKEN}
 		resolvers 1.1.1.1

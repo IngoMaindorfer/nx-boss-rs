@@ -57,7 +57,11 @@
       method: 'POST', credentials: 'same-origin', cache: 'no-store',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      const error = new Error('Request failed');
+      error.status = response.status;
+      throw error;
+    }
     return response.json();
   };
   const authenticate = async (start, finish) => {
@@ -76,21 +80,42 @@
     const target = document.querySelector('[data-passkey-error]');
     if (target) {
       target.hidden = false;
-      target.textContent = document.documentElement.lang === 'en'
-        ? 'Passkey action failed. Please try again.' : 'Passkey-Aktion fehlgeschlagen. Bitte erneut versuchen.';
+      const detail = error?.name === 'NotAllowedError' ? target.dataset.errorCancel
+        : error?.status === 403 || error?.name === 'SecurityError' ? target.dataset.errorOrigin
+          : error?.status === 401 ? target.dataset.errorCode : null;
+      target.textContent = detail || (document.documentElement.lang === 'en'
+        ? 'Passkey action failed. Please try again.' : 'Passkey-Aktion fehlgeschlagen. Bitte erneut versuchen.');
     }
     // Authentication responses and credentials must never be sent to the console.
     void error;
   };
 
-  document.querySelector('[data-passkey-setup]')?.addEventListener('submit', async (event) => {
+  const setupForm = document.querySelector('[data-passkey-setup]');
+  const setupField = setupForm?.elements.token;
+  const toggle = setupForm?.querySelector('[data-secret-toggle]');
+  const hideSetupCode = () => {
+    if (setupField) setupField.type = 'password';
+    if (toggle) { toggle.textContent = toggle.dataset.show; toggle.setAttribute('aria-pressed', 'false'); }
+  };
+  if (toggle && setupField) {
+    toggle.hidden = false;
+    toggle.addEventListener('click', () => {
+      const reveal = setupField.type === 'password';
+      setupField.type = reveal ? 'text' : 'password';
+      toggle.textContent = reveal ? toggle.dataset.hide : toggle.dataset.show;
+      toggle.setAttribute('aria-pressed', String(reveal));
+    });
+  }
+
+  setupForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
-    const button = form.querySelector('button');
+    const button = form.querySelector('button[type=submit]');
+    hideSetupCode();
     button.disabled = true;
     try {
       await register('/passkey/setup/start', '/passkey/setup/finish', {
-        token: form.elements.token.value, username: form.elements.username.value,
+        name: form.elements.passkey_name?.value.trim() || '', token: form.elements.token.value.trim(), username: form.elements.username.value,
       });
       window.location.assign('/');
     } catch (error) { report(error); button.disabled = false; }
@@ -110,9 +135,20 @@
     button.disabled = true;
     try {
       await authenticate('/passkey/stepup/start', '/passkey/stepup/finish');
-      await register('/passkey/account/add/start', '/passkey/account/add/finish');
+      await register('/passkey/account/add/start', '/passkey/account/add/finish', { name: document.querySelector('[name=passkey_name]')?.value.trim() || '' });
       window.location.reload();
     } catch (error) { report(error); button.disabled = false; }
+  });
+
+  document.querySelectorAll('[data-passkey-remove]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      try {
+        await authenticate('/passkey/stepup/start', '/passkey/stepup/finish');
+        await post('/passkey/account/remove', { key_id: button.dataset.passkeyRemove });
+        window.location.reload();
+      } catch (error) { report(error); button.disabled = false; }
+    });
   });
 
   document.querySelectorAll('form[data-passkey-stepup]').forEach((form) => {

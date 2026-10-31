@@ -111,7 +111,7 @@
         <td>{{ t.pixel_format_label(scan.pixel_format) }}</td>
         <td>{% if scan.source == "feeder" %}{{ t.source_duplex }}{% else if scan.source == "feederFront" %}{{ t.source_front }}{% else if scan.source == "feederRear" %}{{ t.source_rear }}{% else %}{{ t.source_simplex }}{% endif %}</td>
         <td>{% if let Some(m) = scan.scanner_model %}{{ m }}{% else %}—{% endif %}</td>
-        <td>{% if scan.completed %}{{ t.status_completed }}{% else %}{{ t.status_open }}{% endif %}{% if let Some(status) = scan.paperless_status %}<br>Paperless: {{ status }}{% endif %}</td>
+        <td>{% if scan.corrupt %}{% if t.code == "de" %}Beschädigte Scandaten{% else %}Corrupt scan data{% endif %}{% else if scan.completed %}{{ t.status_completed }}{% else %}{{ t.status_open }}{% endif %}{% if let Some(status) = scan.paperless_status %}<br>Paperless: {{ status }}{% endif %}</td>
         <td><a href="/scans/{{ scan.batch_id }}" class="btn btn-sm btn-secondary">{{ t.btn_details }}</a></td>
       </tr>
       {% endfor %}

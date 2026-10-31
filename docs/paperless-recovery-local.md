@@ -16,3 +16,26 @@ nx-boss uses the Paperless HTTP API and stores one receipt per scan batch. This 
 4. If Paperless has no task or document, nx-boss normally retries after its settle window. Check the saved error and network connectivity. Never mark a batch imported based only on an HTTP 2xx POST response: the Paperless task can fail later.
 
 Back up nx-boss scan directories, their `metadata.json` files, and Paperless at coordinated points. After restoring either side to an older point, review all unconfirmed batches and previously confirmed document IDs before resuming automatic delivery. A numeric document ID can refer to a different document after restore. There is no automatic restore fence or global exactly-once claim.
+
+## Recovery actions added by the 31 October review
+
+An open scan older than one hour is flagged for attention. Its detail page offers
+**Complete and deliver** and **Discard**, each requiring a fresh, single-use
+passkey confirmation. These actions reload an evicted batch from its stored files;
+they do not depend on the 24-hour in-memory cache. An empty batch completes without
+creating a PDF or a Paperless receipt. A damaged batch has its own visible state;
+it blocks target changes with a corruption error until inspected or explicitly
+discarded. Discard removes that selected scan; it does not modify Paperless.
+
+For an unconfirmed Paperless delivery, **Retry delivery** rebuilds the staged PDF
+and resets the saved task only after the operator checks the existing import and
+accepts the duplicate warning. **Assign document ID** records a positive ID verified
+by the operator in Paperless. Both require passkey confirmation. The worker and
+these actions share a delivery lock so a running request cannot overwrite the
+operator's newer receipt. Repeated identical metadata states are not rewritten.
+A task pending for over one hour is marked for manual review; it is not blindly
+submitted a second time.
+
+`created` remains the requested scan date. Set `NX_BOSS_TIMEZONE` to an IANA zone
+(default `Europe/Berlin`); title and Paperless date use that zone, while stored
+`created_at` stays UTC. Timezone data is embedded for the Scratch runtime image.

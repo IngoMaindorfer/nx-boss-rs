@@ -29,20 +29,7 @@ impl FromRequestParts<AppState> for UiState {
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         let mut localized = state.clone();
-        let cookie_lang = parts
-            .headers
-            .get(header::COOKIE)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|cookies| {
-                cookies.split(';').find_map(|cookie| {
-                    let (name, value) = cookie.trim().split_once('=')?;
-                    (name == "ui_lang" && matches!(value, "de" | "en")).then_some(value)
-                })
-            });
-        let lang = cookie_lang
-            .map(str::to_owned)
-            .unwrap_or_else(|| crate::lock!(state.lang).clone());
-        localized.translations = crate::translations::for_lang(&lang);
+        localized.translations = crate::translations::for_lang(request_lang(state, &parts.headers));
         Ok(Self(localized))
     }
 }
@@ -121,30 +108,6 @@ async fn force_json(mut req: Request, next: Next) -> Response {
     next.run(req).await
 }
 
-// Custom headers (like HX-Request) cannot be sent cross-origin without a CORS preflight
-// that the server must explicitly allow. Requiring this header for all UI mutations
-// blocks cross-site form submissions without a per-request token.
-async fn csrf_check(req: Request, next: Next) -> Response {
-    let is_mutation = matches!(req.method().as_str(), "POST" | "PUT" | "PATCH" | "DELETE");
-    let is_scanner = req.uri().path().starts_with("/NmWebService/");
-
-    let is_auth = matches!(
-        req.uri().path(),
-        "/login" | "/setup/prepare" | "/setup/complete"
-    );
-    if is_mutation && !is_scanner && !is_auth {
-        let hx = req
-            .headers()
-            .get("hx-request")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if !hx.eq_ignore_ascii_case("true") && !admin::secure_origin(req.headers()) {
-            return StatusCode::FORBIDDEN.into_response();
-        }
-    }
-    next.run(req).await
-}
-
 async fn admin_origin_check(req: Request, next: Next) -> Response {
     if matches!(req.method().as_str(), "POST" | "PUT" | "PATCH" | "DELETE")
         && !admin::secure_origin(req.headers())
@@ -154,16 +117,29 @@ async fn admin_origin_check(req: Request, next: Next) -> Response {
     next.run(req).await
 }
 
-fn admin_cookie(headers: &axum::http::HeaderMap) -> Option<&str> {
+fn cookie_value<'a>(headers: &'a axum::http::HeaderMap, name: &str) -> Option<&'a str> {
     headers
-        .get(header::COOKIE)?
-        .to_str()
-        .ok()?
-        .split(';')
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|h| h.to_str().ok())
+        .flat_map(|h| h.split(';'))
         .find_map(|part| {
-            let (name, value) = part.trim().split_once('=')?;
-            (name == "__Host-nx-admin" && !value.is_empty()).then_some(value)
+            let (key, value) = part.trim().split_once('=')?;
+            (key == name && !value.is_empty()).then_some(value)
         })
+}
+
+fn request_lang(state: &AppState, headers: &axum::http::HeaderMap) -> &'static str {
+    match cookie_value(headers, "ui_lang") {
+        Some("en") => "en",
+        Some("de") => "de",
+        _ if crate::lock!(state.lang).as_str() == "en" => "en",
+        _ => "de",
+    }
+}
+
+fn admin_cookie(headers: &axum::http::HeaderMap) -> Option<&str> {
+    cookie_value(headers, "__Host-nx-admin")
 }
 
 async fn admin_session_gate(State(state): State<AppState>, req: Request, next: Next) -> Response {
@@ -180,11 +156,7 @@ async fn admin_session_gate(State(state): State<AppState>, req: Request, next: N
     if !auth.configured() {
         if matches!(
             path,
-            "/setup"
-                | "/setup/prepare"
-                | "/setup/complete"
-                | "/passkey/setup/start"
-                | "/passkey/setup/finish"
+            "/setup" | "/passkey/setup/start" | "/passkey/setup/finish"
         ) {
             return next.run(req).await;
         }
@@ -293,7 +265,14 @@ async fn request_log(request: Request, next: Next) -> Response {
 }
 
 async fn browser_security_headers(req: Request, next: Next) -> Response {
+    let private = !req.uri().path().starts_with("/static/");
     let mut response = next.run(req).await;
+    if private {
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("private, no-store"),
+        );
+    }
     response.headers_mut().insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -301,7 +280,7 @@ async fn browser_security_headers(req: Request, next: Next) -> Response {
     response.headers_mut().insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
         ),
     );
     response.headers_mut().insert(
@@ -387,7 +366,7 @@ async fn job_rows_script() -> impl IntoResponse {
 
 fn admin_routes() -> Router<AppState> {
     Router::new()
-        .route("/login", get(admin::login_get).post(admin::login_post))
+        .route("/login", get(admin::login_get))
         .route("/passkey/login/start", post(admin::passkey_login_start))
         .route("/passkey/login/finish", post(admin::passkey_login_finish))
         .route("/passkey/setup/start", post(admin::passkey_setup_start))
@@ -395,20 +374,14 @@ fn admin_routes() -> Router<AppState> {
         .route("/passkey/stepup/start", post(admin::passkey_stepup_start))
         .route("/passkey/stepup/finish", post(admin::passkey_stepup_finish))
         .route("/passkey/account/add/start", post(admin::passkey_add_start))
+        .route("/passkey/account/remove", post(admin::passkey_remove))
         .route(
             "/passkey/account/add/finish",
             post(admin::passkey_add_finish),
         )
         .route("/logout", post(admin::logout_post))
         .route("/setup", get(admin::setup_get))
-        .route("/setup/prepare", post(admin::setup_prepare))
-        .route("/setup/complete", post(admin::setup_complete))
-        .route(
-            "/account",
-            get(admin::account_get).post(admin::account_post),
-        )
-        .route("/account/totp/prepare", post(admin::totp_prepare))
-        .route("/account/totp/complete", post(admin::totp_complete))
+        .route("/account", get(admin::account_get))
         .route("/static/htmx.min.js", get(htmx_script))
         .route("/static/auth.css", get(auth_css))
         .route("/static/scan-rows.js", get(scan_rows_script))
@@ -435,6 +408,7 @@ fn admin_routes() -> Router<AppState> {
         .route("/jobs/{id}", delete(jobs_delete))
         .route("/scans", get(scans_list))
         .route("/scans/{id}", get(scans_detail))
+        .route("/scans/{id}/{action}", post(scans::recover))
         .route("/scans/{id}/files/{filename}", get(scans_file))
         .route("/settings", get(settings_get))
         .route("/settings", post(settings_post))
@@ -453,7 +427,10 @@ fn scanner_routes() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
         .route("/NmWebService/heartbeat", get(scanner::heartbeat))
-        .route("/NmWebService/device", post(scanner::device))
+        .route(
+            "/NmWebService/device",
+            post(scanner::device).layer(axum::extract::DefaultBodyLimit::max(16 * 1024)),
+        )
         .route(
             "/NmWebService/authorization",
             get(scanner::get_authorization),
@@ -480,7 +457,6 @@ pub fn admin_router(state: AppState) -> Router {
 pub fn admin_router_with_hosts(state: AppState, allowed_hosts: Vec<String>) -> Router {
     admin_routes()
         .layer(middleware::from_fn(admin_origin_check))
-        .layer(middleware::from_fn(csrf_check))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             admin_session_gate,
@@ -508,30 +484,18 @@ pub fn scanner_router(state: AppState) -> Router {
 }
 
 #[cfg(test)]
-pub fn router(state: AppState) -> Router {
-    admin_routes()
-        .merge(scanner_routes())
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            scanner_session_gate,
-        ))
-        .layer(middleware::from_fn(force_json))
-        .layer(middleware::from_fn(csrf_check))
-        .layer(middleware::from_fn(browser_security_headers))
-        .layer(DefaultBodyLimit::max(34 * 1024 * 1024))
-        .layer(middleware::from_fn(request_log))
-        .with_state(state)
-}
+pub(crate) mod test_support;
 
 #[cfg(test)]
 mod tests {
+    use crate::routes::test_support::TestApp;
     use axum_test::TestServer;
     use serde_json::json;
 
     use crate::config::{Config, Job};
     use crate::state::AppState;
 
-    fn test_server() -> (TestServer, tempfile::TempDir) {
+    fn test_server() -> (TestApp, tempfile::TempDir) {
         let tmp = tempfile::TempDir::new().unwrap();
         let config = Config {
             jobs: vec![Job {
@@ -545,7 +509,137 @@ mod tests {
             }],
             ..Default::default()
         };
-        (TestServer::new(super::router(AppState::new(config))), tmp)
+        (TestApp::new(AppState::new(config)), tmp)
+    }
+
+    #[test]
+    fn language_and_session_parse_separate_cookie_headers() {
+        use super::{admin_cookie, request_lang};
+        use axum::http::{HeaderValue, header};
+        let state = crate::state::AppState::new(Default::default());
+        let mut headers = axum::http::HeaderMap::new();
+        headers.append(
+            header::COOKIE,
+            HeaderValue::from_static("__Host-nx-admin=session"),
+        );
+        headers.append(header::COOKIE, HeaderValue::from_static("ui_lang=en"));
+        assert_eq!(admin_cookie(&headers), Some("session"));
+        assert_eq!(request_lang(&state, &headers), "en");
+    }
+
+    #[tokio::test]
+    async fn security_pages_use_server_language_and_explicit_cookie() {
+        let state = crate::state::AppState::new(crate::config::Config {
+            lang: "en".into(),
+            ..Default::default()
+        });
+        let server = crate::routes::test_support::TestApp::new(state);
+        for path in [
+            "/login",
+            "/account",
+            "/settings/scanner",
+            "/settings/paperless",
+        ] {
+            let response = server.get(path).await;
+            assert!(
+                response.text().contains("lang=\"en\""),
+                "server language ignored on {path}"
+            );
+            let response = server
+                .get(path)
+                .add_header("cookie", server.cookie("ui_lang=de"))
+                .await;
+            assert!(
+                response.text().contains("lang=\"de\""),
+                "cookie ignored on {path}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn admin_pages_disable_caching_and_restrict_form_destinations() {
+        let (server, _tmp) = test_server();
+        for path in ["/", "/scans", "/settings"] {
+            let response = server.get(path).await;
+            assert_eq!(
+                response
+                    .headers()
+                    .get("cache-control")
+                    .and_then(|v| v.to_str().ok()),
+                Some("private, no-store")
+            );
+            assert!(
+                response.headers()["content-security-policy"]
+                    .to_str()
+                    .unwrap()
+                    .contains("form-action 'self'")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn protected_mutations_require_session_and_same_origin() {
+        let root = tempfile::tempdir().unwrap();
+        let auth = crate::admin_auth::AdminAuth::open(root.path(), &[0x42; 32]).unwrap();
+        let session = auth.test_session();
+        let state = AppState::new(Config::default()).with_admin_auth(auth);
+        let server = TestServer::new(super::admin_router(state));
+        for path in [
+            "/settings",
+            "/settings/language",
+            "/settings/scanner",
+            "/settings/paperless",
+            "/jobs",
+            "/jobs/reorder",
+            "/jobs/0",
+            "/jobs/0/expert",
+            "/logout",
+            "/passkey/stepup/start",
+            "/passkey/stepup/finish",
+            "/passkey/account/add/start",
+            "/passkey/account/add/finish",
+            "/passkey/account/remove",
+            "/scans/0123456789abcdef0123456789abcdef/complete",
+            "/scans/0123456789abcdef0123456789abcdef/discard",
+            "/scans/0123456789abcdef0123456789abcdef/retry",
+            "/scans/0123456789abcdef0123456789abcdef/assign",
+        ] {
+            assert_eq!(
+                server.post(path).await.status_code(),
+                401,
+                "missing session: {path}"
+            );
+            assert_eq!(
+                server
+                    .post(path)
+                    .add_header("cookie", format!("__Host-nx-admin={session}"))
+                    .add_header("hx-request", "true")
+                    .await
+                    .status_code(),
+                403,
+                "HX alone is insufficient: {path}"
+            );
+            assert_eq!(
+                server
+                    .post(path)
+                    .add_header("cookie", format!("__Host-nx-admin={session}"))
+                    .add_header("origin", "https://attacker.invalid")
+                    .add_header("x-forwarded-proto", "https")
+                    .await
+                    .status_code(),
+                403,
+                "wrong origin: {path}"
+            );
+        }
+        assert_eq!(
+            server
+                .delete("/jobs/0")
+                .add_header("origin", "https://localhost")
+                .add_header("x-forwarded-proto", "https")
+                .await
+                .status_code(),
+            401
+        );
     }
 
     #[tokio::test]
@@ -579,6 +673,8 @@ mod tests {
         std::fs::create_dir_all(&out).unwrap();
         let resp = server
             .post("/jobs")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[
                 ("name", "FormJob"),
@@ -595,22 +691,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_csrf_ui_mutation_without_hx_request_is_forbidden() {
-        // POST to UI route without HX-Request header must be rejected with 403.
-        // This prevents cross-site form submissions — custom headers are blocked by CORS.
+    async fn test_admin_mutation_without_matching_origin_is_forbidden() {
         let (server, _tmp) = test_server();
-        let resp = server
+        let response = server
             .post("/settings")
+            .add_header("origin", "https://attacker.invalid")
+            .add_header("x-forwarded-proto", "https")
             .form(&[("archive_after_days", "7"), ("delete_after_days", "30")])
             .await;
-        assert_eq!(resp.status_code(), 403);
+        assert_eq!(response.status_code(), 403);
     }
 
     #[tokio::test]
-    async fn test_csrf_ui_mutation_with_hx_request_is_allowed() {
+    async fn test_htmx_does_not_replace_matching_origin() {
         let (server, _tmp) = test_server();
         let resp = server
             .post("/settings")
+            .add_header("origin", "https://localhost")
+            .add_header("x-forwarded-proto", "https")
             .add_header("HX-Request", "true")
             .form(&[("archive_after_days", "7"), ("delete_after_days", "30")])
             .await;
@@ -618,7 +716,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_csrf_scanner_route_not_affected() {
+    async fn test_scanner_router_accepts_requests_without_admin_origin() {
         // Scanner routes must work without HX-Request (scanner doesn't use HTMX).
         let (server, _tmp) = test_server();
         let resp = server
@@ -629,8 +727,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_csrf_get_request_not_affected() {
-        // CSRF guard must not block safe (idempotent) GET requests.
+    async fn test_authenticated_get_does_not_require_origin() {
+        // The real admin router requires a session for GET, but no Origin header.
         let (server, _tmp) = test_server();
         assert_eq!(server.get("/settings").await.status_code(), 200);
     }
@@ -697,6 +795,8 @@ mod tests {
         assert_eq!(
             server
                 .post("/settings")
+                .add_header("origin", "https://localhost")
+                .add_header("x-forwarded-proto", "https")
                 .add_header("hx-request", "true")
                 .await
                 .status_code(),
@@ -708,25 +808,12 @@ mod tests {
     async fn configured_admin_requires_session_and_logout_revokes_it() {
         let dir = tempfile::tempdir().unwrap();
         let auth = crate::admin_auth::AdminAuth::open(dir.path(), &[0x42; 32]).unwrap();
-        let token = std::fs::read_to_string(dir.path().join("admin-setup-token")).unwrap();
-        let preview = auth.prepare_setup(&token, "owner").unwrap();
-        let secret = base32::decode(
-            base32::Alphabet::Rfc4648 { padding: false },
-            &preview.manual_secret,
-        )
-        .unwrap();
-        let code = crate::admin_auth::totp(&secret)
-            .unwrap()
-            .generate_current()
-            .to_string();
-        let session = auth
-            .complete_setup(&token, "a sufficiently long password", &code)
-            .unwrap();
-        let server = TestServer::new(super::admin_router_with_hosts(
-            AppState::new(Config::default()).with_admin_auth(auth),
-            vec!["localhost".into()],
-        ));
-        assert_eq!(server.get("/").await.status_code(), 303);
+        let session = auth.test_session();
+        let state = AppState {
+            admin_auth: Some(auth),
+            ..AppState::new(Config::default())
+        };
+        let server = TestServer::new(super::admin_router(state));
         let cookie = format!("__Host-nx-admin={session}");
         assert_eq!(
             server
@@ -795,8 +882,16 @@ mod tests {
     #[tokio::test]
     async fn language_cookie_localizes_each_request_independently() {
         let (server, _tmp) = test_server();
-        let english = server.get("/").add_header("cookie", "ui_lang=en");
-        let german = server.get("/").add_header("cookie", "ui_lang=de");
+        let english = server
+            .get("/")
+            .clear_headers()
+            .add_header("host", "localhost")
+            .add_header("cookie", server.cookie("ui_lang=en"));
+        let german = server
+            .get("/")
+            .clear_headers()
+            .add_header("host", "localhost")
+            .add_header("cookie", server.cookie("ui_lang=de"));
         let (english, german) = tokio::join!(english, german);
         assert!(english.text().contains("<html lang=\"en\">"));
         assert!(english.text().contains("Recent Scans"));

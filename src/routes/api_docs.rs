@@ -48,6 +48,7 @@ pub async fn script() -> impl IntoResponse {
 
 #[cfg(test)]
 mod tests {
+    use crate::routes::test_support::TestApp;
     use axum_test::TestServer;
     use serde_json::Value;
 
@@ -127,7 +128,7 @@ mod tests {
             "anonymous access must be denied"
         );
 
-        let merged = TestServer::new(routes::router(AppState::new(Config::default())));
+        let merged = TestApp::new(AppState::new(Config::default()));
         let response = merged.get("/api/openapi.json").await;
         assert_eq!(response.status_code(), 200);
         assert_eq!(response.json::<Value>()["openapi"], "3.1.0");

@@ -29,7 +29,7 @@
         <td><time datetime="{{ scan.created_at }}">{{ scan.created_at }}</time></td>
         <td>{{ scan.job_name }}</td>
         <td>{{ scan.page_count }}</td>
-        <td>{% if scan.completed %}{{ t.status_completed }}{% else %}{{ t.status_open }}{% endif %}{% if let Some(status) = scan.paperless_status %}<br>Paperless: {{ status }}{% endif %}</td>
+        <td>{% if scan.corrupt %}{% if t.code == "de" %}Beschädigte Scandaten{% else %}Corrupt scan data{% endif %}{% else if scan.completed %}{{ t.status_completed }}{% else %}{{ t.status_open }}{% endif %}{% if let Some(status) = scan.paperless_status %}<br>Paperless: {{ status }}{% endif %}</td>
         <td><a href="/scans/{{ scan.batch_id }}" class="btn btn-sm btn-secondary">{{ t.btn_details }}</a></td>
       </tr>
       {% endfor %}

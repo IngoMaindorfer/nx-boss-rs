@@ -74,6 +74,7 @@ mod pdf;
 mod retention;
 mod routes;
 mod scanner_auth;
+mod security;
 mod state;
 mod translations;
 
@@ -195,11 +196,21 @@ async fn run(event_log: event_log::EventLog) -> Result<()> {
         }
         _ => anyhow::bail!("unsupported scanner diagnostic mode"),
     };
-    let paperless_client = config
-        .paperless
-        .clone()
-        .map(paperless::PaperlessClient::from_env)
-        .transpose()?;
+    let paperless_client =
+        config
+            .paperless
+            .clone()
+            .and_then(|cfg| match paperless::PaperlessClient::from_env(cfg) {
+                Ok(client) => Some(client),
+                Err(_) => {
+                    warn!(
+                        event = "paperless.config_unavailable",
+                        error_class = "configuration",
+                        "Paperless delivery paused; correct the integration settings"
+                    );
+                    None
+                }
+            });
     if config.jobs.is_empty() {
         warn!(
             event = "config.no_jobs",
@@ -239,7 +250,7 @@ async fn run(event_log: event_log::EventLog) -> Result<()> {
     let mut state = state::AppState::new(config)
         .with_config_path(config_path)
         .with_admin_auth(admin_auth)
-        .with_event_log(event_log);
+        .with_event_log(event_log.clone());
     if scanner_auth_mode.requires_login() {
         info!(
             event = "scanner.userpass_enabled",
@@ -265,6 +276,7 @@ async fn run(event_log: event_log::EventLog) -> Result<()> {
         state.jobs.clone(),
         state.paperless_client.clone(),
         shutdown_rx.clone(),
+        state.delivery_lock.clone(),
     )));
     let scanner_app = routes::scanner_router(state.clone());
     let mut allowed_admin_hosts = vec![
@@ -326,6 +338,13 @@ async fn run(event_log: event_log::EventLog) -> Result<()> {
     paperless_result?;
     retention_result?;
     info!(event = "service.shutdown_complete", "shutdown complete");
+    if event_log.flush().is_err() {
+        warn!(
+            event = "event_log.unavailable",
+            error_class = "storage",
+            "event journal flush failed"
+        );
+    }
     Ok(())
 }
 

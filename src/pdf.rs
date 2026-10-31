@@ -13,82 +13,88 @@ struct JpegInfo {
 
 /// Parse JPEG dimensions, component count and DPI from JFIF/SOF markers.
 fn parse_jpeg(data: &[u8]) -> Option<JpegInfo> {
-    if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
+    parse_jpeg_with_dpi(data, 300)
+}
+
+pub(crate) fn valid_jpeg(data: &[u8]) -> bool {
+    parse_jpeg(data).is_some()
+}
+
+fn parse_jpeg_with_dpi(data: &[u8], fallback_dpi: u32) -> Option<JpegInfo> {
+    if !data.starts_with(&[0xff, 0xd8]) {
         return None;
     }
-    let mut dpi = 300.0_f64;
-    let mut dims: Option<(u32, u32, u8)> = None;
     let mut pos = 2;
-
-    while pos + 4 <= data.len() {
-        if data[pos] != 0xFF {
-            break;
+    let mut dpi = if fallback_dpi > 0 {
+        f64::from(fallback_dpi)
+    } else {
+        300.0
+    };
+    while pos < data.len() {
+        if data[pos] != 0xff {
+            return None;
         }
-        let marker = data[pos + 1];
-
-        // JFIF APP0 — contains DPI
-        if marker == 0xE0 && pos + 16 <= data.len() && &data[pos + 4..pos + 9] == b"JFIF\0" {
-            let units = data[pos + 11];
-            let xd = u16::from_be_bytes([data[pos + 12], data[pos + 13]]) as f64;
-            if xd > 0.0 {
-                dpi = match units {
-                    1 => xd,
-                    2 => xd * 2.54,
+        while data.get(pos) == Some(&0xff) {
+            pos += 1;
+        }
+        let marker = *data.get(pos)?;
+        pos += 1;
+        if matches!(marker, 0xd9 | 0xda) {
+            return None;
+        }
+        if matches!(marker, 0xd0..=0xd7 | 0x01) {
+            continue;
+        }
+        let length = usize::from(u16::from_be_bytes([*data.get(pos)?, *data.get(pos + 1)?]));
+        if length < 2 || pos.checked_add(length)? > data.len() {
+            return None;
+        }
+        let segment = &data[pos + 2..pos + length];
+        if marker == 0xe0 && segment.len() >= 12 && segment.starts_with(b"JFIF\0") {
+            let density = f64::from(u16::from_be_bytes([segment[8], segment[9]]));
+            if density > 0.0 {
+                dpi = match segment[7] {
+                    1 => density,
+                    2 => density * 2.54,
                     _ => dpi,
                 };
             }
         }
-
-        // SOF markers — contain width, height, components
-        if matches!(
-            marker,
-            0xC0 | 0xC1
-                | 0xC2
-                | 0xC3
-                | 0xC5
-                | 0xC6
-                | 0xC7
-                | 0xC9
-                | 0xCA
-                | 0xCB
-                | 0xCD
-                | 0xCE
-                | 0xCF
-        ) && pos + 9 < data.len()
-        {
-            let h = u16::from_be_bytes([data[pos + 5], data[pos + 6]]) as u32;
-            let w = u16::from_be_bytes([data[pos + 7], data[pos + 8]]) as u32;
-            let comps = data[pos + 9];
-            dims = Some((w, h, comps));
-            break;
+        if matches!(marker,0xc0..=0xc3|0xc5..=0xc7|0xc9..=0xcb|0xcd..=0xcf) {
+            if !matches!(marker, 0xc0..=0xc2) || segment.len() < 6 || segment[0] != 8 {
+                return None;
+            }
+            let height = u32::from(u16::from_be_bytes([segment[1], segment[2]]));
+            let width = u32::from(u16::from_be_bytes([segment[3], segment[4]]));
+            let components = segment[5];
+            if width == 0 || height == 0 || segment.len() < 6 + usize::from(components) * 3 {
+                return None;
+            }
+            let color_space = match components {
+                1 => "DeviceGray",
+                3 => "DeviceRGB",
+                4 => "DeviceCMYK",
+                _ => return None,
+            };
+            return Some(JpegInfo {
+                width,
+                height,
+                color_space,
+                dpi,
+            });
         }
-
-        if marker == 0xD9 {
-            break;
-        }
-        let seg_len = u16::from_be_bytes([data[pos + 2], data[pos + 3]]) as usize;
-        if seg_len < 2 {
-            break;
-        }
-        pos += 2 + seg_len;
+        pos += length;
     }
-
-    let (width, height, comps) = dims?;
-    let color_space = if comps == 1 {
-        "DeviceGray"
-    } else {
-        "DeviceRGB"
-    };
-    Some(JpegInfo {
-        width,
-        height,
-        color_space,
-        dpi,
-    })
+    None
 }
 
 /// Assemble JPEG pages into a single PDF, embedding them without re-encoding.
+#[cfg(test)]
 pub fn assemble_pdf(jpeg_pages: &[Vec<u8>]) -> Result<Vec<u8>> {
+    assemble_pdf_with_dpi(jpeg_pages, 300)
+}
+
+pub fn assemble_pdf_with_dpi(jpeg_pages: &[Vec<u8>], fallback_dpi: u32) -> Result<Vec<u8>> {
     if jpeg_pages.is_empty() {
         bail!("no pages to assemble");
     }
@@ -97,7 +103,7 @@ pub fn assemble_pdf(jpeg_pages: &[Vec<u8>]) -> Result<Vec<u8>> {
     let mut page_ids = Vec::new();
 
     for (i, jpeg) in jpeg_pages.iter().enumerate() {
-        let info = parse_jpeg(jpeg)
+        let info = parse_jpeg_with_dpi(jpeg, fallback_dpi)
             .ok_or_else(|| anyhow::anyhow!("cannot parse JPEG header for page {i}"))?;
 
         // Page size in PDF points (72 pt = 1 inch)
@@ -232,6 +238,35 @@ mod tests {
         v.extend_from_slice(&[0x01, 0x01, 0x11, 0x00]); // 1 component
         v.extend_from_slice(&[0xFF, 0xD9]); // EOI
         v
+    }
+
+    #[test]
+    fn job_resolution_is_used_when_jpeg_has_no_density() {
+        let jpeg = make_jpeg_no_jfif(150, 150);
+        assert_eq!(parse_jpeg_with_dpi(&jpeg, 150).unwrap().dpi, 150.0);
+        let pdf = assemble_pdf_with_dpi(&[jpeg], 150).unwrap();
+        let doc = lopdf::Document::load_mem(&pdf).unwrap();
+        let page = *doc.get_pages().get(&1).unwrap();
+        let values = doc
+            .get_object(page)
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .get(b"MediaBox")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(values[2].as_float().unwrap(), 72.0);
+    }
+
+    #[test]
+    fn jpeg_fill_bytes_and_cmyk_are_supported() {
+        let mut fill = make_jpeg_no_jfif(100, 100);
+        fill.insert(2, 0xff);
+        assert!(parse_jpeg(&fill).is_some());
+        let mut cmyk = vec![0xff, 0xd8, 0xff, 0xc0, 0, 20, 8, 0, 100, 0, 100, 4];
+        cmyk.extend_from_slice(&[1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0, 4, 0x11, 0, 0xff, 0xd9]);
+        assert_eq!(parse_jpeg(&cmyk).unwrap().color_space, "DeviceCMYK");
     }
 
     #[test]

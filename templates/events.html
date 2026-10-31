@@ -15,7 +15,7 @@
       <tr>
         <td><time datetime="{{ entry.timestamp }}">{{ entry.timestamp }}</time></td>
         <td>{{ entry.level }}</td>
-        <td><code>{{ entry.event }}</code></td>
+        <td><code>{{ entry.event }}</code> ×{{ entry.count }}<br><small>{{ entry.last_seen }}</small></td>
         <td>{% if let Some(class) = entry.error_class %}{{ class }}{% else %}—{% endif %}</td>
         <td>{% if let Some(status) = entry.http_status %}{{ status }}{% else %}—{% endif %}</td>
         <td>{% if let Some(batch_id) = entry.batch_id %}<a href="/scans/{{ batch_id }}">{{ batch_id }}</a>{% else %}—{% endif %}</td>

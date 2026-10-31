@@ -40,7 +40,11 @@ pub enum UploadError {
     LimitExceeded,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, thiserror::Error)]
+#[error("corrupt scan data; inspect or discard the damaged batch before changing configuration")]
+pub struct CorruptBatchError;
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct ScannerInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -48,7 +52,7 @@ pub struct ScannerInfo {
     pub serial: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct JobConfig {
     pub resolution: u32,
     pub pixel_format: String,
@@ -67,7 +71,7 @@ impl Default for JobConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BatchMetadata {
     pub job_name: String,
     #[serde(default)]
@@ -83,7 +87,7 @@ pub struct BatchMetadata {
     pub paperless: Option<PaperlessReceipt>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct PaperlessReceipt {
     pub task_id: Option<String>,
     pub document_id: Option<u64>,
@@ -105,7 +109,7 @@ pub struct PaperlessUploadOptions {
     pub batch_id_field_id: Option<u32>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct FileEntry {
     pub filename: String,
     pub received_at: String,
@@ -131,21 +135,15 @@ impl Batch {
         if !valid_batch_id(id) {
             return Ok(false);
         }
-        let path = job.output_path.join(id).join("metadata.json");
-        if !path.exists() {
+        let Some(batch) = Self::open(job, id)? else {
             return Ok(false);
-        }
-        let meta: BatchMetadata = serde_json::from_slice(&std::fs::read(path)?)?;
-        let belongs = meta
-            .job_id
-            .map(|job_id| job.job_info["job_id"].as_u64() == Some(job_id as u64))
-            .unwrap_or_else(|| meta.job_name == job.name());
-        Ok(belongs
-            && (!meta.completed
-                || meta
-                    .paperless
-                    .as_ref()
-                    .is_some_and(|p| p.document_id.is_none())))
+        };
+        Ok(!batch.metadata.completed
+            || batch
+                .metadata
+                .paperless
+                .as_ref()
+                .is_some_and(|p| p.document_id.is_none()))
     }
 
     pub fn resume(job: &Job, id: &str) -> Result<Option<Self>> {
@@ -164,16 +162,15 @@ impl Batch {
         }))
     }
 
-    fn open(job: &Job, id: &str) -> Result<Option<Self>> {
+    pub(crate) fn open(job: &Job, id: &str) -> Result<Option<Self>> {
         if !valid_batch_id(id) {
             return Ok(None);
         }
         let dir = job.output_path.join(id);
-        if !dir.is_dir() {
+        if !dir.symlink_metadata().is_ok_and(|m| m.file_type().is_dir()) {
             return Ok(None);
         }
-        let mut metadata: BatchMetadata =
-            serde_json::from_slice(&std::fs::read(dir.join("metadata.json"))?)?;
+        let metadata = Self::inspect_directory(&dir)?;
         let belongs_to_job = metadata
             .job_id
             .map(|id| job.job_info["job_id"].as_u64() == Some(id as u64))
@@ -181,24 +178,41 @@ impl Batch {
         if !belongs_to_job {
             return Ok(None);
         }
-        for page in &mut metadata.files {
-            if page.filename.starts_with('.')
-                || !page
-                    .filename
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
-                || !dir.join(&page.filename).is_file()
-            {
-                anyhow::bail!("invalid page in saved batch");
-            }
-            page.size = std::fs::metadata(dir.join(&page.filename))?.len();
-        }
         Ok(Some(Self {
             id: id.to_string(),
             dir,
             consume_path: job.consume_path.clone(),
             metadata,
         }))
+    }
+
+    pub(crate) fn inspect_directory(dir: &Path) -> Result<BatchMetadata> {
+        let meta_path = dir.join("metadata.json");
+        if !meta_path
+            .symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_file())
+        {
+            return Err(CorruptBatchError.into());
+        }
+        let mut metadata: BatchMetadata =
+            serde_json::from_slice(&std::fs::read(&meta_path).map_err(|_| CorruptBatchError)?)
+                .map_err(|_| CorruptBatchError)?;
+        for page in &mut metadata.files {
+            if page.filename.starts_with('.')
+                || !page
+                    .filename
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+                || !dir
+                    .join(&page.filename)
+                    .symlink_metadata()
+                    .is_ok_and(|m| m.file_type().is_file())
+            {
+                return Err(CorruptBatchError.into());
+            }
+            page.size = std::fs::metadata(dir.join(&page.filename))?.len();
+        }
+        Ok(metadata)
     }
 
     pub fn create(job: &Job, scanner: ScannerInfo) -> Result<Self> {
@@ -302,13 +316,47 @@ impl Batch {
     }
 
     pub fn record_paperless_error(&mut self, error: &str) -> Result<()> {
+        let error: String = error.chars().take(500).collect();
+        if self
+            .metadata
+            .paperless
+            .as_ref()
+            .is_some_and(|r| r.last_error.as_deref() == Some(error.as_str()))
+        {
+            return Ok(());
+        }
         if self.metadata.paperless.is_some() {
             self.update_metadata(|metadata| {
                 let receipt = metadata.paperless.as_mut().expect("receipt exists");
-                receipt.last_error = Some(error.chars().take(500).collect());
+                receipt.last_error = Some(error);
             })?;
         }
         Ok(())
+    }
+
+    pub fn retry_paperless(&mut self) -> Result<()> {
+        anyhow::ensure!(
+            self.metadata.completed
+                && self
+                    .metadata
+                    .paperless
+                    .as_ref()
+                    .is_some_and(|r| r.document_id.is_none()),
+            "no pending Paperless delivery"
+        );
+        let pdf = crate::pdf::assemble_pdf_with_dpi(
+            &self.load_pages()?,
+            self.metadata.job_config.resolution,
+        )?;
+        crate::atomic_file::write(&self.pdf_path(), &pdf)?;
+        self.update_metadata(|m| {
+            let receipt = m.paperless.as_mut().expect("checked receipt");
+            receipt.task_id = None;
+            receipt.document_id = None;
+            receipt.last_error = None;
+            receipt.upload_attempts = 0;
+            receipt.last_attempt_at = None;
+        })
     }
 
     pub fn pdf_path(&self) -> PathBuf {
@@ -365,9 +413,18 @@ impl Batch {
         if self.metadata.completed {
             return Ok(());
         }
+        if self.metadata.files.is_empty() {
+            return self.update_metadata(|metadata| {
+                metadata.completed = true;
+                metadata.paperless = None;
+            });
+        }
         let pdf = if self.consume_path.is_some() || self.metadata.paperless.is_some() {
             let pages = self.load_pages()?;
-            Some(crate::pdf::assemble_pdf(&pages)?)
+            Some(crate::pdf::assemble_pdf_with_dpi(
+                &pages,
+                self.metadata.job_config.resolution,
+            )?)
         } else {
             None
         };
@@ -497,6 +554,9 @@ impl Batch {
     fn update_metadata(&mut self, update: impl FnOnce(&mut BatchMetadata)) -> Result<()> {
         let mut next = self.metadata.clone();
         update(&mut next);
+        if next == self.metadata {
+            return Ok(());
+        }
         self.write_metadata(&next)?;
         self.metadata = next;
         Ok(())
@@ -535,6 +595,34 @@ mod tests {
             job_info: json!({"name": "test", "job_id": 0, "color": "#4D4D4D", "type": 0, "job_setting": {}, "hierarchy_list": null}),
             scan_settings: json!({}),
         }
+    }
+
+    #[test]
+    fn empty_paperless_batch_completes_without_document_or_receipt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let job = make_job(tmp.path());
+        let mut batch = Batch::create(&job, ScannerInfo::default()).unwrap();
+        batch.enable_paperless().unwrap();
+        batch.complete().unwrap();
+        assert!(batch.metadata().completed);
+        assert!(batch.metadata().paperless.is_none());
+        assert!(!batch.pdf_path().exists());
+    }
+    #[test]
+    fn unchanged_paperless_error_does_not_rewrite_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let job = make_job(tmp.path());
+        let mut batch = Batch::create(&job, ScannerInfo::default()).unwrap();
+        batch.enable_paperless().unwrap();
+        batch.record_paperless_error("same failure").unwrap();
+        let path = tmp.path().join(&batch.id).join("metadata.json");
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        batch.record_paperless_error("same failure").unwrap();
+        assert_eq!(
+            std::fs::metadata(path).unwrap().modified().unwrap(),
+            modified
+        );
     }
 
     fn block_metadata_replace(batch: &Batch) {

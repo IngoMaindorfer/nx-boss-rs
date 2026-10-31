@@ -33,17 +33,34 @@ pub struct DevicePayload {
     pub serial_no: String,
 }
 
-pub async fn device(
-    State(state): State<AppState>,
-    Json(payload): Json<DevicePayload>,
-) -> Json<Value> {
+pub async fn device(State(state): State<AppState>, Json(payload): Json<DevicePayload>) -> Response {
+    if [
+        &payload.scanner_name,
+        &payload.scanner_model,
+        &payload.serial_no,
+    ]
+    .iter()
+    .any(|v| v.len() > 256)
+        || [
+            &payload.call_timing,
+            &payload.scanner_ip,
+            &payload.scanner_mac,
+        ]
+        .iter()
+        .any(|v| v.len() > 64)
+        || [&payload.scanner_port, &payload.scanner_protocol]
+            .iter()
+            .any(|v| v.len() > 16)
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
     info!(event = "scanner.registered", "scanner registered");
     state.scanner.set_info(
         payload.scanner_name,
         payload.scanner_model,
         payload.serial_no,
     );
-    Json(json!({ "system_time": now_iso(), "server_version": "2.6.0.4" }))
+    Json(json!({ "system_time": now_iso(), "server_version": "2.6.0.4" })).into_response()
 }
 
 #[derive(Deserialize)]
@@ -445,10 +462,10 @@ mod tests {
     use serde_json::json;
 
     use crate::config::{Config, Job};
-    use crate::routes::router;
+    use crate::routes::test_support::TestApp;
     use crate::state::AppState;
 
-    fn test_server_with_job() -> TestServer {
+    fn test_server_with_job() -> TestApp {
         let tmp = tempfile::TempDir::new().unwrap();
         let config = Config {
             jobs: vec![Job {
@@ -462,15 +479,39 @@ mod tests {
             }],
             ..Default::default()
         };
-        TestServer::new(router(AppState::new(config)))
+        TestApp::new(AppState::new(config))
     }
 
-    fn empty_server() -> TestServer {
+    fn empty_server() -> TestApp {
         let config = Config {
             jobs: vec![],
             ..Default::default()
         };
-        TestServer::new(router(AppState::new(config)))
+        TestApp::new(AppState::new(config))
+    }
+
+    #[tokio::test]
+    async fn device_metadata_and_request_body_are_bounded() {
+        let server = empty_server();
+        let fields = serde_json::json!({"call_timing":"startup","scanner_ip":"127.0.0.1","scanner_mac":"00:11:22:33:44:55","scanner_model":"test","scanner_name":"x".repeat(512),"scanner_port":"20448","scanner_protocol":"https","serial_no":"test"});
+        assert_eq!(
+            server
+                .post("/NmWebService/device")
+                .json(&fields)
+                .await
+                .status_code(),
+            400
+        );
+        let mut huge = fields;
+        huge["scanner_name"] = serde_json::Value::String("x".repeat(17000));
+        assert_eq!(
+            server
+                .post("/NmWebService/device")
+                .json(&huge)
+                .await
+                .status_code(),
+            413
+        );
     }
 
     #[tokio::test]
@@ -529,7 +570,7 @@ mod tests {
             Some(&password_file),
         )
         .unwrap();
-        let server = TestServer::new(router(AppState::new(config).with_scanner_auth_mode(mode)));
+        let server = TestApp::new(AppState::new(config).with_scanner_auth_mode(mode));
 
         let offer = server
             .get("/NmWebService/authorization")
@@ -617,7 +658,7 @@ mod tests {
     #[tokio::test]
     async fn changing_scanner_mode_replaces_live_sessions() {
         let state = AppState::new(Config::default());
-        let server = TestServer::new(router(state.clone()));
+        let server = TestApp::new(state.clone());
         assert_eq!(
             server
                 .get("/NmWebService/authorization")
