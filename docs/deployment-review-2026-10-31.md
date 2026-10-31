@@ -1,5 +1,30 @@
 # Review-Rollout und Betreiberübergabe, 31.10.2026
 
+## N5–N7: zusätzlicher Rollout
+
+Abgenommen am **31.10.2026 um 18:48:21 CET**. Main-Commit `cc92988e7a06cdafc12f4b6b13c5607d851a1d78` nach vollständig grüner
+[Main-CI 41220219678](https://github.com/IngoMaindorfer/nx-boss-rs/actions/runs/41220219678).
+
+- Image: `sha256:bb65e50db68066b2545140d43ddd8ab25e3df129dfc01bff92d19fb4d3d97c40`, dauerhaft `nx-boss-rs:local`.
+- Rollback: `nx-boss-rs:pre-logout-20261031`, vorheriges Image `sha256:a7af248804b191f970b65d76f94c68923807de93cdfdc6b510d59612370ce168`.
+- Geschützte ungelesene Sicherung: `/opt/nx-boss-rs/backups/pre-logout-20261031/20261031T174803Z/`, Verzeichnis 0700, beide Tars 0600.
+- PVE-Backup war beendet (ActiveState inactive), tatsächlicher nächster Trigger `Sun 2026-11-01 02:14:39 CET`; Scan-Ruhe und Exportprozessfreiheit unmittelbar vor dem Stopp bestätigt. Keine Kalender-Schätzung.
+- Beide Container healthy, neues laufendes Image identisch, Health/Admin-HTTPS 200, HSTS/CSP, je null neue ERROR in App/Caddy.
+- Exaktes Image isoliert bestätigt: Footer `cc92988`, Logout mit ungültiger Sitzung und gültigem Geräte-Cookie 303 nach /login, beide Cookies gelöscht und altes Gerätevertrauen serverseitig widerrufen. Echter Idle-Ablauf zusätzlich im Rust-Routertest. Kein produktiver Testpasskey.
+- 248 Rust-, 17 Browser- und alle bisherigen Struktur-/Shutdown-/Logging-/Paperless-Tests grün. Homelab: 28 Tests für Scan-Guard und Healthgrenzen grün. Audit unverändert zwei dokumentierte Warnungen.
+
+Der neue PVE-Nachtplan (02:00 Europe/Berlin, bis 15 Minuten Zufallsversatz),
+15 Minuten Scan-Ruhe / maximal 60 Minuten Wartezeit und 36 Stunden PVE-Health
+sind installiert. Desktop-/Laptop-Timer bleiben vierstündlich. Der neue Helper
+wird in Anwendungsexporte und zukünftige Notfallpakete aufgenommen; ältere
+Pakete brauchen aktuelle Helper-/Timer-/Health-Dateien, siehe Homelab-Notfalldoku.
+Leere .nobackup in den Build-Verzeichnissen, Marker-Unterstützung in tatsächlich
+installierten Desktop-/PVE-Runnern minimal nachgerüstet. Gastmarker beeinflussen
+keine vollständigen VMA-Backups. Unbenutzten Docker-Buildcache vor und nach dem
+Build freigegeben bereinigt und fstrim ausgeführt, getaggte Images erhalten.
+Konzept-/Doku-Folgecommits ändern die Laufzeitquellen nicht; kein weiterer Build
+oder Rollout für diese Übergabe erforderlich.
+
 ## Stand und erster Rollout des Nachtrags
 
 793db1c wurde am **31.10.2026 um 12:47:52 CET (11:47:52 UTC)** auf
@@ -36,9 +61,11 @@ unangetastet. Es gab keinen physischen Testscan in diesem Rollout.
    aus 02/06/10/14/18/22 Uhr. Nach B07 gilt PVE täglich 02:00 Europe/Berlin plus
    bis 15 Minuten Zufallsverzögerung und Nachholen verpasster Termine. Deadline
    von Export-Wartezeit und ein etwaiger überlanger Lauf sind zusätzlich zu beachten.
-3. Image im Build-Verzeichnis mit korrektem GIT_SHA bauen:
+3. Im getrennten Build-Verzeichnis zuerst eine leere `.nobackup` anlegen;
+   Image dort mit korrektem GIT_SHA bauen:
 
    ```sh
+   touch .nobackup
    nx_revision=VOLLSTAENDIGER_MAIN_COMMIT
    docker build --target app --build-arg GIT_SHA="$nx_revision" \
      -t "nx-boss-rs:review-$nx_revision" .
