@@ -7,7 +7,7 @@ FROM caddy:2.11.4-alpine AS caddy
 COPY --from=caddy-builder /usr/bin/caddy /usr/bin/caddy
 COPY scripts/start-caddy.sh /usr/local/bin/start-caddy.sh
 
-FROM rust:1.99.1-slim-trixie AS builder
+FROM rust:1.100.0-slim-trixie AS builder
 
 WORKDIR /app
 
